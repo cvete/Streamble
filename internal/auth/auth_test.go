@@ -7,6 +7,24 @@ import (
 	"github.com/cvete/streamble/internal/config"
 )
 
+func TestAuthorizePlay(t *testing.T) {
+	cfg := config.Default()
+	cfg.Apps = []config.App{{Name: "open", PublishKey: "pub"}, {Name: "paid", PlayKey: "viewer"}}
+	a := New(cfg)
+	if _, _, err := a.AuthorizePlay("open/x", ""); err != nil {
+		t.Fatalf("open app should allow playback without key: %v", err)
+	}
+	if _, _, err := a.AuthorizePlay("paid/x", "nope"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+	if p, _, err := a.AuthorizePlay("/paid/x", "viewer"); err != nil || p != "paid/x" {
+		t.Fatalf("got %q %v", p, err)
+	}
+	if _, _, err := a.AuthorizePlay("open/x", "pub"); err != nil {
+		t.Fatal("publish key must not be needed for playback")
+	}
+}
+
 func TestAuthorizePublish(t *testing.T) {
 	cfg := config.Default()
 	cfg.Apps = []config.App{

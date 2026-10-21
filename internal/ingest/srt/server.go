@@ -6,17 +6,15 @@ package srt
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	gosrt "github.com/datarhei/gosrt"
 
-	"github.com/bluenviron/mediacommon/v2/pkg/formats/mpegts"
-
 	"github.com/cvete/streamble/internal/auth"
 	"github.com/cvete/streamble/internal/core"
+	"github.com/cvete/streamble/internal/tsconv"
 )
 
 const readTimeout = 10 * time.Second
@@ -151,113 +149,12 @@ func (s *Server) handleRequest(req gosrt.ConnRequest) {
 }
 
 func (s *Server) publish(conn gosrt.Conn, path, remote string) error {
-	conn.SetReadDeadline(time.Now().Add(readTimeout)) //nolint:errcheck
-
-	r := &mpegts.Reader{R: mpegts.NewBufferedReader(conn)}
-	if err := r.Initialize(); err != nil {
-		return fmt.Errorf("reading MPEG-TS: %w", err)
-	}
-	r.OnDecodeError(func(err error) {
-		s.Log.Debug("MPEG-TS decode error", "path", path, "err", err)
-	})
-
-	var stream *core.Stream
-	var tracks []*core.Track
-	td := &mpegts.TimeDecoder{}
-	td.Initialize()
-
-	for _, mt := range r.Tracks() {
-		if t := s.attachTrack(r, mt, td, &stream); t != nil {
-			tracks = append(tracks, t)
-		}
-	}
-
-	stream, err := s.Hub.Publish(path, tracks, core.SourceInfo{Protocol: "srt", RemoteAddr: remote})
-	if err != nil {
+	r := &tsconv.TimeoutReader{Conn: conn, R: conn, Timeout: readTimeout}
+	err := tsconv.Demux(r, s.Hub, path, core.SourceInfo{Protocol: "srt", RemoteAddr: remote}, s.Log)
+	if errors.Is(err, core.ErrAlreadyPublishing) {
 		s.Log.Warn("SRT publish failed", "path", path, "err", err)
-		return err
 	}
-	defer s.Hub.Unpublish(stream)
-
-	for {
-		conn.SetReadDeadline(time.Now().Add(readTimeout)) //nolint:errcheck
-		if err := r.Read(); err != nil {
-			return err
-		}
-	}
-}
-
-func ticksToDuration(t int64) time.Duration {
-	return time.Duration(t) * time.Second / 90000
-}
-
-// attachTrack converts an MPEG-TS track into a hub track and registers a
-// data callback. It returns nil for unsupported codecs.
-func (s *Server) attachTrack(r *mpegts.Reader, mt *mpegts.Track, td *mpegts.TimeDecoder, stream **core.Stream) *core.Track {
-	switch c := mt.Codec.(type) {
-	case *mpegts.CodecH264:
-		t := core.NewTrack(&core.H264{})
-		keeper := core.NewParamKeeper(t.Codec)
-		r.OnDataH264(mt, func(pts, dts int64, au [][]byte) error {
-			writeVideo(*stream, t, keeper, td.Decode(pts), td.Decode(dts), au)
-			return nil
-		})
-		return t
-
-	case *mpegts.CodecH265:
-		t := core.NewTrack(&core.H265{})
-		keeper := core.NewParamKeeper(t.Codec)
-		r.OnDataH265(mt, func(pts, dts int64, au [][]byte) error {
-			writeVideo(*stream, t, keeper, td.Decode(pts), td.Decode(dts), au)
-			return nil
-		})
-		return t
-
-	case *mpegts.CodecMPEG4Audio:
-		cfg := c.Config
-		t := core.NewTrack(&core.AAC{Config: &cfg})
-		r.OnDataMPEG4Audio(mt, func(pts int64, aus [][]byte) error {
-			(*stream).WriteUnit(&core.Unit{
-				Track: t, NTP: time.Now(), PTS: ticksToDuration(td.Decode(pts)), Payload: aus,
-			})
-			return nil
-		})
-		return t
-
-	case *mpegts.CodecOpus:
-		ch := 2
-		if c.Desc != nil && c.Desc.ExplicitChannelCount > 0 {
-			ch = c.Desc.ExplicitChannelCount
-		} else if c.ChannelCount > 0 { //nolint:staticcheck
-			ch = c.ChannelCount //nolint:staticcheck
-		}
-		t := core.NewTrack(&core.Opus{ChannelCount: ch})
-		r.OnDataOpus(mt, func(pts int64, packets [][]byte) error {
-			(*stream).WriteUnit(&core.Unit{
-				Track: t, NTP: time.Now(), PTS: ticksToDuration(td.Decode(pts)), Payload: packets,
-			})
-			return nil
-		})
-		return t
-	}
-
-	s.Log.Warn("SRT track ignored: codec not supported yet", "codec", fmt.Sprintf("%T", mt.Codec))
-	return nil
-}
-
-func writeVideo(stream *core.Stream, t *core.Track, k *core.ParamKeeper, pts, dts int64, au [][]byte) {
-	au, key := k.Process(au)
-	if au == nil {
-		return
-	}
-	stream.WriteUnit(&core.Unit{
-		Track:        t,
-		NTP:          time.Now(),
-		PTS:          ticksToDuration(pts),
-		DTS:          ticksToDuration(dts),
-		Payload:      au,
-		RandomAccess: key,
-	})
+	return err
 }
 
 // redact hides publish keys in logged stream IDs.

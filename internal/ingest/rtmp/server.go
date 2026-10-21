@@ -129,14 +129,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 	}
 
 	var stream *core.Stream
-	var tracks []*core.Track
-
-	for _, rt := range r.Tracks() {
-		t := s.attachTrack(r, rt, &stream)
-		if t != nil {
-			tracks = append(tracks, t)
-		}
-	}
+	tracks := AttachTracks(r, &stream, s.Log)
 
 	stream, err = s.Hub.Publish(path, tracks, core.SourceInfo{Protocol: "rtmp", RemoteAddr: remote})
 	if err != nil {
@@ -153,11 +146,25 @@ func (s *Server) handleConn(conn net.Conn) error {
 	}
 }
 
-// attachTrack converts an RTMP track into a hub track and registers a data
-// callback that writes into *stream. Callbacks only fire from r.Read(),
-// which runs after the stream has been published. It returns nil for
-// unsupported codecs.
-func (s *Server) attachTrack(r *gortmplib.Reader, rt *gortmplib.Track, stream **core.Stream) *core.Track {
+// AttachTracks converts the tracks of an initialized RTMP reader into hub
+// tracks and registers data callbacks that write into *stream. Set *stream
+// (by publishing the returned tracks) before calling r.Read(): callbacks
+// only fire from Read. Unsupported codecs are logged and skipped.
+//
+// It is used for RTMP publishers and for pulling rtmp:// sources.
+func AttachTracks(r *gortmplib.Reader, stream **core.Stream, log *slog.Logger) []*core.Track {
+	var tracks []*core.Track
+	for _, rt := range r.Tracks() {
+		if t := attachTrack(r, rt, stream); t != nil {
+			tracks = append(tracks, t)
+		} else {
+			log.Warn("RTMP track ignored: codec not supported yet", "codec", fmt.Sprintf("%T", rt.Codec))
+		}
+	}
+	return tracks
+}
+
+func attachTrack(r *gortmplib.Reader, rt *gortmplib.Track, stream **core.Stream) *core.Track {
 	switch c := rt.Codec.(type) {
 	case *codecs.H264:
 		t := core.NewTrack(&core.H264{SPS: c.SPS, PPS: c.PPS})
@@ -192,9 +199,22 @@ func (s *Server) attachTrack(r *gortmplib.Reader, rt *gortmplib.Track, stream **
 			(*stream).WriteUnit(&core.Unit{Track: t, NTP: time.Now(), PTS: pts, Payload: [][]byte{pkt}})
 		})
 		return t
+
+	case *codecs.MPEG1Audio:
+		t := core.NewTrack(&core.MPEGAudio{})
+		r.OnDataMPEG1Audio(rt, func(pts time.Duration, frame []byte) {
+			(*stream).WriteUnit(&core.Unit{Track: t, NTP: time.Now(), PTS: pts, Payload: [][]byte{frame}})
+		})
+		return t
+
+	case *codecs.AC3:
+		t := core.NewTrack(&core.AC3{SampleRate: c.SampleRate, ChannelCount: c.ChannelCount})
+		r.OnDataAC3(rt, func(pts time.Duration, frame []byte) {
+			(*stream).WriteUnit(&core.Unit{Track: t, NTP: time.Now(), PTS: pts, Payload: [][]byte{frame}})
+		})
+		return t
 	}
 
-	s.Log.Warn("RTMP track ignored: codec not supported yet", "codec", fmt.Sprintf("%T", rt.Codec))
 	return nil
 }
 

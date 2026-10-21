@@ -57,3 +57,21 @@ func (a *Authorizer) AuthorizePublish(path, key string) (string, *config.App, er
 	}
 	return appName + "/" + stream, app, nil
 }
+
+// AuthorizePlay validates a playback request (RTMP, SRT, HTTP MPEG-TS,
+// HTTP audio) against the app's play_key and returns the normalised path.
+// It does not check that the stream is live.
+func (a *Authorizer) AuthorizePlay(path, key string) (string, *config.App, error) {
+	appName, stream, err := ParsePath(path)
+	if err != nil {
+		return "", nil, err
+	}
+	app := a.cfg.App(appName)
+	if app == nil {
+		return "", nil, fmt.Errorf("%w %q", ErrUnknownApp, appName)
+	}
+	if app.PlayKey != "" && subtle.ConstantTimeCompare([]byte(app.PlayKey), []byte(key)) != 1 {
+		return "", nil, ErrUnauthorized
+	}
+	return appName + "/" + stream, app, nil
+}

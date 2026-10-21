@@ -69,11 +69,58 @@ func TestValidationErrors(t *testing.T) {
 		"short srt pass":  "apps:\n  - name: a\n    srt_passphrase: short\n",
 		"ll segments":     "hls:\n  segment_count: 3\n",
 		"no ingest":       "rtmp:\n  enabled: false\nsrt:\n  enabled: false\n",
+		"unknown profile": "apps:\n  - name: a\n    transcode: nope\n",
+		"bad push scheme": "apps:\n  - name: a\n    push:\n      - url: http://x\n",
+		"push no url":     "apps:\n  - name: a\n    push:\n      - name: yt\n",
+		"bad hwaccel":     "transcode:\n  profiles:\n    - name: p\n      hwaccel: cuda\n      renditions: [{name: r}]\n",
+		"no renditions":   "transcode:\n  profiles:\n    - name: p\n",
+		"dup rendition":   "transcode:\n  profiles:\n    - name: p\n      renditions: [{name: r}, {name: r}]\n",
+		"bad audio codec": "transcode:\n  profiles:\n    - name: p\n      renditions: [{name: r, audio_codec: flac}]\n",
+		"source bad path": "sources:\n  - path: nope\n    url: http://x/y.ts\n",
+		"source no app":   "sources:\n  - path: other/x\n    url: http://x/y.ts\n",
+		"source no url":   "sources:\n  - path: live/x\n    url: x.ts\n",
 	}
 	for name, content := range cases {
 		if _, err := Load(write(t, content)); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
+	}
+}
+
+func TestMilestone2Config(t *testing.T) {
+	cfg, err := Load(write(t, `
+transcode:
+  profiles:
+    - name: abr
+      hwaccel: nvenc
+      gop: 2s
+      renditions:
+        - {name: 720p, height: 720, video_bitrate: 2500k}
+        - {name: radio, audio_only: true, audio_codec: mp3, audio_bitrate: 128k}
+apps:
+  - name: live
+    transcode: abr
+    play_key: viewer
+    push:
+      - name: youtube
+        url: rtmp://a.rtmp.youtube.com/live2/{stream}
+        streams: [tv1]
+      - url: icecast://source:pw@radio.example:8000/{stream}.mp3
+sources:
+  - path: live/relay
+    url: udp://239.1.1.1:5000
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := cfg.Profile("abr"); p == nil || len(p.Renditions) != 2 || p.GOP != 2*time.Second {
+		t.Fatalf("profile not parsed: %+v", p)
+	}
+	if a := cfg.App("live"); len(a.Push) != 2 || a.PlayKey != "viewer" {
+		t.Fatalf("app not parsed: %+v", a)
+	}
+	if !cfg.Playback.HTTPTS || cfg.Transcode.FFmpeg != "ffmpeg" {
+		t.Fatal("playback/transcode defaults lost")
 	}
 }
 

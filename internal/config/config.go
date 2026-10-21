@@ -15,12 +15,91 @@ import (
 
 // Config is the root of streamble.yml.
 type Config struct {
-	LogLevel string `yaml:"log_level"`
-	RTMP     RTMP   `yaml:"rtmp"`
-	SRT      SRT    `yaml:"srt"`
-	HTTP     HTTP   `yaml:"http"`
-	HLS      HLS    `yaml:"hls"`
-	Apps     []App  `yaml:"apps"`
+	LogLevel  string    `yaml:"log_level"`
+	RTMP      RTMP      `yaml:"rtmp"`
+	SRT       SRT       `yaml:"srt"`
+	HTTP      HTTP      `yaml:"http"`
+	HLS       HLS       `yaml:"hls"`
+	Playback  Playback  `yaml:"playback"`
+	Transcode Transcode `yaml:"transcode"`
+	Apps      []App     `yaml:"apps"`
+	Sources   []Source  `yaml:"sources"`
+}
+
+// Playback enables the non-HLS ways to watch or listen to a stream.
+type Playback struct {
+	// HTTPTS serves /<app>/<stream>.ts as a continuous MPEG-TS stream
+	// (IPTV players, VLC, set-top boxes, other servers).
+	HTTPTS bool `yaml:"http_ts"`
+	// HTTPAudio serves /<app>/<stream>.mp3 and /<app>/<stream>.aac as
+	// Icecast-style radio streams when the stream has that audio codec.
+	HTTPAudio bool `yaml:"http_audio"`
+	// RTMP allows playing rtmp://host/<app>/<stream>.
+	RTMP bool `yaml:"rtmp"`
+	// SRT allows reading with streamid=read:<app>/<stream>.
+	SRT bool `yaml:"srt"`
+}
+
+// Transcode configures FFmpeg-based transcoding.
+type Transcode struct {
+	// FFmpeg is the path to the ffmpeg binary.
+	FFmpeg   string    `yaml:"ffmpeg"`
+	Profiles []Profile `yaml:"profiles"`
+}
+
+// Profile is a named transcoding recipe that apps refer to.
+type Profile struct {
+	Name string `yaml:"name"`
+	// HWAccel selects the video encoder: none (libx264), nvenc, qsv, vaapi.
+	HWAccel string `yaml:"hwaccel"`
+	// VAAPIDevice is the render node for vaapi, e.g. /dev/dri/renderD128.
+	VAAPIDevice string `yaml:"vaapi_device"`
+	// Preset is the encoder speed preset (libx264: veryfast, nvenc: p4, ...).
+	Preset string `yaml:"preset"`
+	// GOP is the keyframe interval. Renditions share it so players can
+	// switch between them at segment boundaries.
+	GOP        time.Duration `yaml:"gop"`
+	Renditions []Rendition   `yaml:"renditions"`
+}
+
+// Rendition is one output of a transcoding profile. It is published as
+// "<app>/<stream>_<name>".
+type Rendition struct {
+	Name string `yaml:"name"`
+	// Height in pixels; width follows the source aspect ratio.
+	// 0 keeps the source size.
+	Height int `yaml:"height"`
+	// FPS caps the frame rate; 0 keeps the source rate.
+	FPS          int    `yaml:"fps"`
+	VideoBitrate string `yaml:"video_bitrate"` // e.g. 2500k
+	AudioBitrate string `yaml:"audio_bitrate"` // e.g. 128k
+	// AudioOnly drops video (radio, low-bandwidth listeners).
+	AudioOnly bool `yaml:"audio_only"`
+	// AudioCodec is aac (default, plays everywhere) or mp3.
+	AudioCodec string `yaml:"audio_codec"`
+}
+
+// Push is a restream target.
+type Push struct {
+	// Name identifies the target in logs and the API.
+	Name string `yaml:"name"`
+	// URL of the target. Supported schemes: rtmp, rtmps, srt, icecast
+	// (icecast://user:pass@host:8000/mount). "{app}" and "{stream}" are
+	// replaced with the stream's app and stream names.
+	URL string `yaml:"url"`
+	// Streams limits the target to these stream names; empty means every
+	// stream of the app.
+	Streams []string `yaml:"streams"`
+}
+
+// Source is a stream pulled from elsewhere and published into the hub.
+type Source struct {
+	// Path to publish at, "<app>/<stream>". The app must exist.
+	Path string `yaml:"path"`
+	// URL to pull. Supported: http(s) MPEG-TS (.ts), Icecast/Shoutcast MP3
+	// or AAC, HLS (.m3u8), udp:// (unicast or multicast MPEG-TS),
+	// srt:// (caller mode), rtmp(s)://.
+	URL string `yaml:"url"`
 }
 
 // RTMP configures the RTMP ingest listener.
@@ -76,6 +155,15 @@ type App struct {
 	// SRTPassphrase, when set, requires SRT publishers to encrypt with it
 	// (10 to 79 characters).
 	SRTPassphrase string `yaml:"srt_passphrase"`
+	// PlayKey, when set, is required to play over RTMP, SRT, HTTP MPEG-TS
+	// and HTTP audio (as "?key=" or in the SRT stream ID). HLS is not
+	// covered yet; signed HLS URLs are planned.
+	PlayKey string `yaml:"play_key"`
+	// Transcode names a transcode profile applied to every stream
+	// published in this app.
+	Transcode string `yaml:"transcode"`
+	// Push lists restream targets for streams of this app.
+	Push []Push `yaml:"push"`
 }
 
 // Variant names.
@@ -102,7 +190,9 @@ func Default() *Config {
 			SegmentDuration: 2 * time.Second,
 			PartDuration:    200 * time.Millisecond,
 		},
-		Apps: []App{{Name: "live"}},
+		Playback:  Playback{HTTPTS: true, HTTPAudio: true, RTMP: true, SRT: true},
+		Transcode: Transcode{FFmpeg: "ffmpeg"},
+		Apps:      []App{{Name: "live"}},
 	}
 }
 
@@ -202,9 +292,87 @@ func (c *Config) Validate() error {
 				add("app %q: invalid stream name %q in stream_keys", a.Name, name)
 			}
 		}
+		if a.Transcode != "" && c.Profile(a.Transcode) == nil {
+			add("app %q: unknown transcode profile %q", a.Name, a.Transcode)
+		}
+		for i, p := range a.Push {
+			if p.URL == "" {
+				add("app %q: push[%d] has no url", a.Name, i)
+				continue
+			}
+			scheme, _, ok := strings.Cut(p.URL, "://")
+			switch {
+			case !ok:
+				add("app %q: push[%d] url must start with a scheme like rtmp://", a.Name, i)
+			case scheme != "rtmp" && scheme != "rtmps" && scheme != "srt" && scheme != "icecast":
+				add("app %q: push[%d] scheme %q not supported (rtmp, rtmps, srt, icecast)", a.Name, i, scheme)
+			}
+		}
+	}
+
+	profiles := map[string]bool{}
+	for _, p := range c.Transcode.Profiles {
+		if !nameRe.MatchString(p.Name) {
+			add("transcode profile name %q is invalid", p.Name)
+		}
+		if profiles[p.Name] {
+			add("transcode profile %q is defined twice", p.Name)
+		}
+		profiles[p.Name] = true
+		switch p.HWAccel {
+		case "", "none", "nvenc", "qsv", "vaapi":
+		default:
+			add("transcode profile %q: hwaccel must be none, nvenc, qsv or vaapi", p.Name)
+		}
+		if len(p.Renditions) == 0 {
+			add("transcode profile %q has no renditions", p.Name)
+		}
+		names := map[string]bool{}
+		for _, r := range p.Renditions {
+			if !nameRe.MatchString(r.Name) {
+				add("transcode profile %q: invalid rendition name %q", p.Name, r.Name)
+			}
+			if names[r.Name] {
+				add("transcode profile %q: rendition %q defined twice", p.Name, r.Name)
+			}
+			names[r.Name] = true
+			if r.Height < 0 || r.FPS < 0 {
+				add("transcode profile %q: rendition %q has a negative height or fps", p.Name, r.Name)
+			}
+			if r.AudioCodec != "" && r.AudioCodec != "aac" && r.AudioCodec != "mp3" {
+				add("transcode profile %q: rendition %q audio_codec must be aac or mp3", p.Name, r.Name)
+			}
+		}
+	}
+
+	paths := map[string]bool{}
+	for i, s := range c.Sources {
+		parts := strings.Split(s.Path, "/")
+		if len(parts) != 2 || !nameRe.MatchString(parts[0]) || !nameRe.MatchString(parts[1]) {
+			add("sources[%d]: path %q must be <app>/<stream>", i, s.Path)
+		} else if c.App(parts[0]) == nil {
+			add("sources[%d]: app %q is not defined", i, parts[0])
+		}
+		if paths[s.Path] {
+			add("sources[%d]: path %q is used twice", i, s.Path)
+		}
+		paths[s.Path] = true
+		if !strings.Contains(s.URL, "://") {
+			add("sources[%d]: url %q must start with a scheme like http://", i, s.URL)
+		}
 	}
 
 	return errors.Join(errs...)
+}
+
+// Profile returns the transcode profile with the given name, or nil.
+func (c *Config) Profile(name string) *Profile {
+	for i := range c.Transcode.Profiles {
+		if c.Transcode.Profiles[i].Name == name {
+			return &c.Transcode.Profiles[i]
+		}
+	}
+	return nil
 }
 
 // App returns the app with the given name, or nil.

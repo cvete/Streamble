@@ -68,12 +68,35 @@ func (*Opus) Name() string { return "Opus" }
 // IsVideo implements Codec.
 func (*Opus) IsVideo() bool { return false }
 
+// MPEGAudio is MPEG-1/2 Audio Layer I, II or III (MP2, MP3).
+// Payload units carry one or more complete frames, each with its header.
+type MPEGAudio struct{}
+
+// Name implements Codec.
+func (*MPEGAudio) Name() string { return "MP3" }
+
+// IsVideo implements Codec.
+func (*MPEGAudio) IsVideo() bool { return false }
+
+// AC3 is Dolby Digital (AC-3). Payload units carry one frame each.
+type AC3 struct {
+	SampleRate   int
+	ChannelCount int
+}
+
+// Name implements Codec.
+func (*AC3) Name() string { return "AC3" }
+
+// IsVideo implements Codec.
+func (*AC3) IsVideo() bool { return false }
+
 // Track is one elementary stream (video or audio) inside a Stream.
 type Track struct {
 	// Codec of the track.
 	Codec Codec
 	// ClockRate is the timestamp resolution expected by outputs:
-	// 90000 for video, the sample rate for AAC, 48000 for Opus.
+	// 90000 for video, the sample rate for AAC, 48000 for Opus, and 90000
+	// for MP3 and AC-3 (which outputs only carry in MPEG-TS or FLV).
 	ClockRate int
 }
 
