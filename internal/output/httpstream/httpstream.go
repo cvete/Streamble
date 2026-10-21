@@ -38,11 +38,13 @@ const (
 // Handler serves continuous HTTP streams. Route requests to it when Match
 // returns true.
 type Handler struct {
-	Hub         *core.Hub
-	Auth        *auth.Authorizer
-	Playback    config.Playback
-	AllowOrigin string
-	Log         *slog.Logger
+	Hub      *core.Hub
+	Auth     *auth.Authorizer
+	Playback config.Playback
+	// PlaybackFunc, when set, replaces Playback so toggles apply live.
+	PlaybackFunc func() config.Playback
+	AllowOrigin  string
+	Log          *slog.Logger
 
 	mu        sync.Mutex
 	listeners map[string]int
@@ -118,7 +120,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if (ext == extTS && !h.Playback.HTTPTS) || (ext != extTS && !h.Playback.HTTPAudio) {
+	pb := h.Playback
+	if h.PlaybackFunc != nil {
+		pb = h.PlaybackFunc()
+	}
+	if (ext == extTS && !pb.HTTPTS) || (ext != extTS && !pb.HTTPAudio) {
 		http.NotFound(w, r)
 		return
 	}

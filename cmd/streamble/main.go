@@ -1,5 +1,6 @@
 // Command streamble is an open-source live streaming server:
-// RTMP and SRT in, HLS and Low-Latency HLS out.
+// RTMP and SRT in, HLS and Low-Latency HLS out, with transcoding,
+// restreaming and a web control panel.
 package main
 
 import (
@@ -19,14 +20,18 @@ import (
 	"github.com/cvete/streamble/internal/auth"
 	"github.com/cvete/streamble/internal/config"
 	"github.com/cvete/streamble/internal/core"
+	"github.com/cvete/streamble/internal/events"
 	"github.com/cvete/streamble/internal/ingest/pull"
 	"github.com/cvete/streamble/internal/ingest/rtmp"
 	"github.com/cvete/streamble/internal/ingest/srt"
 	"github.com/cvete/streamble/internal/output/hls"
 	"github.com/cvete/streamble/internal/output/httpstream"
 	"github.com/cvete/streamble/internal/output/push"
+	"github.com/cvete/streamble/internal/panel"
+	"github.com/cvete/streamble/internal/settings"
+	"github.com/cvete/streamble/internal/store"
 	"github.com/cvete/streamble/internal/transcode"
-	"github.com/cvete/streamble/internal/web"
+	"github.com/cvete/streamble/internal/users"
 )
 
 func main() {
@@ -46,19 +51,28 @@ func run() error {
 		return nil
 	}
 
-	cfg, err := config.Load(*cfgPath)
+	fileCfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
 
-	log := newLogger(cfg.LogLevel)
+	log := newLogger(fileCfg.LogLevel)
 	log.Info("starting Streamble", "version", api.Version, "config", *cfgPath)
 
-	hub := core.NewHub(log)
-	authz := auth.New(cfg)
+	ctx := context.Background()
+	db, err := store.Open(fileCfg.Storage.Driver, fileCfg.Storage.DSN)
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	defer db.Close()
+	log.Info("storage ready", "driver", db.Driver())
 
-	hlsManager := hls.NewManager(cfg.HLS, cfg.HTTP.AllowOrigin, log)
-	hub.AddHook(hlsManager)
+	live, err := settings.Open(ctx, fileCfg, db, log)
+	if err != nil {
+		return err
+	}
+	get := live.Getter()
+	cfg := get() // server settings never change at runtime
 
 	var closers []func()
 	defer func() {
@@ -67,11 +81,25 @@ func run() error {
 		}
 	}()
 
-	pusher := push.NewManager(cfg, log)
+	bus := events.NewBus()
+	hub := core.NewHub(log)
+	authz := auth.NewDynamic(get)
+
+	hlsManager := hls.NewManager(cfg.HLS, cfg.HTTP.AllowOrigin, log)
+	hub.AddHook(hlsManager)
+	hub.AddHook(events.StreamHook{Bus: bus})
+
+	pusher := push.NewManager(get, log)
+	pusher.OnState = func(st push.Status) {
+		bus.Publish(events.Event{Type: config.EventPushState, Data: events.Data(st)})
+	}
 	hub.AddHook(pusher)
 	closers = append(closers, pusher.Close)
 
-	transcoder := transcode.NewManager(cfg, hub, log)
+	transcoder := transcode.NewManager(get, hub, log)
+	transcoder.OnState = func(st transcode.Status) {
+		bus.Publish(events.Event{Type: config.EventTranscodeState, Data: events.Data(st)})
+	}
 	hub.AddHook(transcoder)
 	closers = append(closers, transcoder.Close)
 	hlsManager.ABR = func(path string) []string {
@@ -85,7 +113,8 @@ func run() error {
 	}
 
 	if cfg.RTMP.Enabled {
-		s := &rtmp.Server{Addr: cfg.RTMP.Listen, Hub: hub, Auth: authz, Log: log, AllowPlay: cfg.Playback.RTMP}
+		s := &rtmp.Server{Addr: cfg.RTMP.Listen, Hub: hub, Auth: authz, Log: log,
+			AllowPlayFunc: func() bool { return get().Playback.RTMP }}
 		if err := s.Start(); err != nil {
 			return fmt.Errorf("RTMP: %w", err)
 		}
@@ -93,12 +122,12 @@ func run() error {
 	}
 	if cfg.SRT.Enabled {
 		s := &srt.Server{
-			Addr:      cfg.SRT.Listen,
-			Latency:   time.Duration(cfg.SRT.LatencyMS) * time.Millisecond,
-			Hub:       hub,
-			Auth:      authz,
-			Log:       log,
-			AllowRead: cfg.Playback.SRT,
+			Addr:          cfg.SRT.Listen,
+			Latency:       time.Duration(cfg.SRT.LatencyMS) * time.Millisecond,
+			Hub:           hub,
+			Auth:          authz,
+			Log:           log,
+			AllowReadFunc: func() bool { return get().Playback.SRT },
 		}
 		if err := s.Start(); err != nil {
 			return fmt.Errorf("SRT: %w", err)
@@ -106,30 +135,63 @@ func run() error {
 		closers = append(closers, s.Close)
 	}
 
-	statusAPI := api.New(hub, hlsManager, cfg.HTTP.APIToken, cfg.HLS.Primary)
+	streams := &httpstream.Handler{
+		Hub:          hub,
+		Auth:         authz,
+		PlaybackFunc: func() config.Playback { return get().Playback },
+		AllowOrigin:  cfg.HTTP.AllowOrigin,
+		Log:          log,
+	}
+
+	accounts := &users.Service{
+		DB:            db,
+		TTL:           cfg.Panel.SessionTTL.D(),
+		SecureCookies: cfg.Panel.SecureCookies,
+		LegacyToken:   cfg.HTTP.APIToken,
+		Log:           log,
+	}
+	if err := accounts.EnsureAdmin(ctx); err != nil {
+		return fmt.Errorf("creating the first admin: %w", err)
+	}
+
+	statusAPI := api.New(api.Options{
+		Hub:       hub,
+		HLS:       hlsManager,
+		Users:     accounts,
+		Settings:  live,
+		DB:        db,
+		Bus:       bus,
+		Log:       log,
+		Listeners: streams.Listeners,
+		Restart:   map[string]func(string) bool{transcode.ProtocolTranscode: transcoder.Restart},
+	})
 	closers = append(closers, statusAPI.Close)
 	statusAPI.AddStatus("transcodes", func() any { return transcoder.Status() })
 	statusAPI.AddStatus("pushes", func() any { return pusher.Status() })
 
-	streams := &httpstream.Handler{
-		Hub:         hub,
-		Auth:        authz,
-		Playback:    cfg.Playback,
-		AllowOrigin: cfg.HTTP.AllowOrigin,
-		Log:         log,
-	}
-	statusAPI.Listeners = streams.Listeners
-
 	// Pull sources last, once every hook is registered, so pulled streams
 	// get HLS, transcoding and restreaming like any other.
 	puller := &pull.Manager{Sources: cfg.Sources, Hub: hub, Log: log}
+	puller.OnState = func(st pull.Status) {
+		bus.Publish(events.Event{Type: config.EventSourceState, Data: events.Data(st)})
+	}
 	puller.Start()
 	closers = append(closers, puller.Close)
 	statusAPI.AddStatus("sources", func() any { return puller.Status() })
 
+	// Settings edited in the panel apply live, without dropping streams.
+	live.Subscribe(func(_, cur *config.Config) {
+		pusher.Reconcile()
+		transcoder.Reconcile()
+		puller.Reconcile(cur.Sources)
+	})
+
 	mux := http.NewServeMux()
 	mux.Handle("/api/", statusAPI)
-	mux.Handle("/{$}", web.Handler())
+	if cfg.Panel.Enabled {
+		mux.Handle("/panel/", panel.Handler("/panel/"))
+		mux.Handle("GET /{$}", http.RedirectHandler("/panel/", http.StatusFound))
+	}
 	// /<app>/<stream>.ts|.mp3|.aac are continuous streams; everything else
 	// under / is HLS.
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,17 +210,17 @@ func run() error {
 	}
 	httpErr := make(chan error, 1)
 	go func() {
-		log.Info("HTTP listening (HLS, API, monitor)", "addr", cfg.HTTP.Listen)
+		log.Info("HTTP listening (HLS, API, control panel at /panel/)", "addr", cfg.HTTP.Listen)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			httpErr <- err
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	select {
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		log.Info("shutting down")
 	case err := <-httpErr:
 		return fmt.Errorf("HTTP: %w", err)

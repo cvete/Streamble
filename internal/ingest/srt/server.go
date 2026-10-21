@@ -32,6 +32,9 @@ type Server struct {
 	Log     *slog.Logger
 	// AllowRead enables reading live streams (stream ID mode "read").
 	AllowRead bool
+	// AllowReadFunc, when set, is consulted instead of AllowRead, so the
+	// setting can change at runtime.
+	AllowReadFunc func() bool
 
 	closing chan struct{}
 	ln      gosrt.Listener
@@ -119,7 +122,7 @@ func (s *Server) handleRequest(req gosrt.ConnRequest) {
 	)
 	if sid.Mode == ModeRead {
 		action = "read"
-		if !s.AllowRead {
+		if !s.readAllowed() {
 			log.Warn("SRT read rejected: playback disabled")
 			req.Reject(gosrt.REJ_PEER)
 			return
@@ -244,7 +247,9 @@ func (c *countingConn) Write(p []byte) (int, error) {
 
 func (s *Server) publish(conn gosrt.Conn, path, remote string) error {
 	r := &tsconv.TimeoutReader{Conn: conn, R: conn, Timeout: readTimeout}
-	err := tsconv.Demux(r, s.Hub, path, core.SourceInfo{Protocol: "srt", RemoteAddr: remote}, s.Log)
+	err := tsconv.Demux(r, s.Hub, path, core.SourceInfo{
+		Protocol: "srt", RemoteAddr: remote, Kick: func() { conn.Close() }, //nolint:errcheck
+	}, s.Log)
 	if errors.Is(err, core.ErrAlreadyPublishing) {
 		s.Log.Warn("SRT publish failed", "path", path, "err", err)
 	}
@@ -262,4 +267,11 @@ func redact(sid string) string {
 		mode = "read"
 	}
 	return mode + ":" + parsed.Path + "?key=REDACTED"
+}
+
+func (s *Server) readAllowed() bool {
+	if s.AllowReadFunc != nil {
+		return s.AllowReadFunc()
+	}
+	return s.AllowRead
 }

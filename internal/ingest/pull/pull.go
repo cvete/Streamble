@@ -56,12 +56,22 @@ type Manager struct {
 	Sources []config.Source
 	Hub     *core.Hub
 	Log     *slog.Logger
+	// OnState, when set, is called whenever a source changes state.
+	OnState func(Status)
 
 	mu      sync.Mutex
-	status  []*Status
+	running map[string]*running // by path
+	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	started bool
+}
+
+// running is one active source.
+type running struct {
+	src    config.Source
+	st     *Status
+	cancel context.CancelFunc
 }
 
 // Status describes one pull source.
@@ -86,13 +96,45 @@ func (m *Manager) Start() {
 	if m.Log == nil {
 		m.Log = slog.Default()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.running = make(map[string]*running)
+	m.reconcileLocked(m.Sources)
+}
 
+// Reconcile switches to a new list of sources: added sources start,
+// removed, disabled or changed ones stop, and unchanged ones keep running.
+func (m *Manager) Reconcile(sources []config.Source) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Sources = sources
+	if !m.started || m.ctx.Err() != nil {
+		return
+	}
+	m.reconcileLocked(sources)
+}
+
+func (m *Manager) reconcileLocked(sources []config.Source) {
+	want := map[string]config.Source{}
+	for _, src := range sources {
+		if !src.Disabled {
+			want[src.Path] = src
+		}
+	}
+	for path, r := range m.running {
+		if src, ok := want[path]; !ok || src != r.src {
+			m.Log.Info("pull source removed or changed, stopping", "path", path, "url", r.st.URL)
+			r.cancel()
+			delete(m.running, path)
+		}
+	}
 	now := time.Now()
-	for _, src := range m.Sources {
+	for path, src := range want {
+		if m.running[path] != nil {
+			continue
+		}
 		st := &Status{Path: src.Path, URL: RedactURL(src.URL), State: StateConnecting, Since: now}
-		m.status = append(m.status, st)
+		ctx, cancel := context.WithCancel(m.ctx)
+		m.running[path] = &running{src: src, st: st, cancel: cancel}
 		r := &runner{m: m, src: src, st: st, redacted: st.URL}
 		m.wg.Add(1)
 		go func() {
@@ -118,9 +160,9 @@ func (m *Manager) Close() {
 // Status returns the state of every source, sorted by path.
 func (m *Manager) Status() []Status {
 	m.mu.Lock()
-	out := make([]Status, 0, len(m.status))
-	for _, st := range m.status {
-		out = append(out, *st)
+	out := make([]Status, 0, len(m.running))
+	for _, r := range m.running {
+		out = append(out, *r.st)
 	}
 	m.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
@@ -136,17 +178,24 @@ type runner struct {
 
 	liveAt time.Time // set by markLive, read by run (same goroutine chain)
 	liveMu sync.Mutex
+	// attemptCancel ends the current connection attempt (kick).
+	attemptCancel context.CancelFunc
 }
 
 func (r *runner) setState(state, lastErr string) {
 	r.m.mu.Lock()
-	defer r.m.mu.Unlock()
-	if r.st.State != state {
+	changed := r.st.State != state
+	if changed {
 		r.st.State = state
 		r.st.Since = time.Now()
 	}
 	if lastErr != "" {
 		r.st.LastError = lastErr
+	}
+	snap := *r.st
+	r.m.mu.Unlock()
+	if changed && r.m.OnState != nil {
+		r.m.OnState(snap)
 	}
 }
 
@@ -169,7 +218,17 @@ func (r *runner) liveFor() time.Duration {
 }
 
 func (r *runner) sourceInfo() core.SourceInfo {
-	return core.SourceInfo{Protocol: "pull", RemoteAddr: r.redacted}
+	return core.SourceInfo{Protocol: "pull", RemoteAddr: r.redacted, Kick: r.restartAttempt}
+}
+
+// restartAttempt drops the current connection; the runner reconnects.
+func (r *runner) restartAttempt() {
+	r.liveMu.Lock()
+	cancel := r.attemptCancel
+	r.liveMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (r *runner) run(ctx context.Context) {
@@ -180,7 +239,12 @@ func (r *runner) run(ctx context.Context) {
 		r.liveMu.Unlock()
 		r.setState(StateConnecting, "")
 
-		err := r.pullOnce(ctx)
+		attemptCtx, cancel := context.WithCancel(ctx)
+		r.liveMu.Lock()
+		r.attemptCancel = cancel
+		r.liveMu.Unlock()
+		err := r.pullOnce(attemptCtx)
+		cancel()
 		if ctx.Err() != nil {
 			return
 		}

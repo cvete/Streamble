@@ -35,6 +35,9 @@ func (u *Unit) size() uint64 {
 type SourceInfo struct {
 	Protocol   string // "rtmp", "srt", ...
 	RemoteAddr string
+	// Kick, when set, disconnects the publisher (or, for pulled sources,
+	// restarts the connection). Set by the ingest that publishes.
+	Kick func()
 }
 
 // Stream is a live stream with exactly one publisher and any number of
@@ -71,6 +74,19 @@ func newStream(path string, tracks []*Track, src SourceInfo) *Stream {
 		}
 	}
 	return s
+}
+
+// Kickable reports whether the publisher can be disconnected.
+func (s *Stream) Kickable() bool { return s.Source.Kick != nil }
+
+// Kick disconnects the publisher. It reports false when the stream cannot
+// be kicked (for example a transcoder rendition).
+func (s *Stream) Kick() bool {
+	if s.Source.Kick == nil {
+		return false
+	}
+	s.Source.Kick()
+	return true
 }
 
 // HasVideo reports whether the stream contains a video track.

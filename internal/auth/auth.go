@@ -20,11 +20,15 @@ var (
 
 // Authorizer checks publish requests against the configured apps.
 type Authorizer struct {
-	cfg *config.Config
+	cfg config.Getter
 }
 
-// New creates an Authorizer.
-func New(cfg *config.Config) *Authorizer { return &Authorizer{cfg: cfg} }
+// New creates an Authorizer for a fixed configuration.
+func New(cfg *config.Config) *Authorizer { return &Authorizer{cfg: config.Static(cfg)} }
+
+// NewDynamic creates an Authorizer that reads the current configuration on
+// every request, so key changes apply to the next connection.
+func NewDynamic(get config.Getter) *Authorizer { return &Authorizer{cfg: get} }
 
 // ParsePath splits "app/stream" (leading and trailing slashes ignored).
 func ParsePath(p string) (app, stream string, err error) {
@@ -43,7 +47,7 @@ func (a *Authorizer) AuthorizePublish(path, key string) (string, *config.App, er
 	if err != nil {
 		return "", nil, err
 	}
-	app := a.cfg.App(appName)
+	app := a.cfg().App(appName)
 	if app == nil {
 		return "", nil, fmt.Errorf("%w %q", ErrUnknownApp, appName)
 	}
@@ -66,7 +70,7 @@ func (a *Authorizer) AuthorizePlay(path, key string) (string, *config.App, error
 	if err != nil {
 		return "", nil, err
 	}
-	app := a.cfg.App(appName)
+	app := a.cfg().App(appName)
 	if app == nil {
 		return "", nil, fmt.Errorf("%w %q", ErrUnknownApp, appName)
 	}

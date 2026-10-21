@@ -574,3 +574,11 @@ func (c *Config) App(name string) *App {
 
 // ValidStreamName reports whether s is an acceptable stream name.
 func ValidStreamName(s string) bool { return nameRe.MatchString(s) }
+
+// Getter returns the current configuration snapshot. Modules hold a Getter
+// instead of a *Config so settings changed in the panel apply live.
+// Snapshots are immutable: never modify the returned value.
+type Getter func() *Config
+
+// Static returns a Getter that always returns c (tests, fixed setups).
+func Static(c *Config) Getter { return func() *Config { return c } }

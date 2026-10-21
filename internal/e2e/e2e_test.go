@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cvete/streamble/internal/api"
 	"github.com/cvete/streamble/internal/auth"
 	"github.com/cvete/streamble/internal/config"
 	"github.com/cvete/streamble/internal/core"
@@ -66,12 +65,7 @@ func start(t *testing.T) *env {
 	}
 	t.Cleanup(ss.Close)
 
-	a := api.New(hub, hm, "", cfg.HLS.Primary)
-	t.Cleanup(a.Close)
-	mux := http.NewServeMux()
-	mux.Handle("/api/", a)
-	mux.Handle("/", hm)
-	hs := httptest.NewServer(mux)
+	hs := httptest.NewServer(hm)
 	t.Cleanup(hs.Close)
 
 	return &env{hub: hub, rtmpAddr: rs.ListenAddr().String(), srtAddr: ss.ListenAddr(), http: hs}

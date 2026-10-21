@@ -40,6 +40,9 @@ type Server struct {
 	Log  *slog.Logger
 	// AllowPlay enables RTMP playback of live streams.
 	AllowPlay bool
+	// AllowPlayFunc, when set, is consulted instead of AllowPlay on every
+	// play request, so the setting can change at runtime.
+	AllowPlayFunc func() bool
 
 	ln      net.Listener
 	closing chan struct{}
@@ -146,7 +149,9 @@ func (s *Server) handleConn(conn net.Conn) error {
 	var stream *core.Stream
 	tracks := AttachTracks(r, &stream, s.Log)
 
-	stream, err = s.Hub.Publish(path, tracks, core.SourceInfo{Protocol: "rtmp", RemoteAddr: remote})
+	stream, err = s.Hub.Publish(path, tracks, core.SourceInfo{
+		Protocol: "rtmp", RemoteAddr: remote, Kick: func() { conn.Close() }, //nolint:errcheck
+	})
 	if err != nil {
 		s.Log.Warn("RTMP publish failed", "remote", remote, "path", path, "err", err)
 		return err
@@ -161,9 +166,16 @@ func (s *Server) handleConn(conn net.Conn) error {
 	}
 }
 
+func (s *Server) playAllowed() bool {
+	if s.AllowPlayFunc != nil {
+		return s.AllowPlayFunc()
+	}
+	return s.AllowPlay
+}
+
 // play sends a live stream to an RTMP player.
 func (s *Server) play(conn net.Conn, sc *gortmplib.ServerConn, remote string) error {
-	if !s.AllowPlay {
+	if !s.playAllowed() {
 		sc.RejectAction() //nolint:errcheck
 		s.Log.Warn("RTMP playback rejected: disabled", "remote", remote, "path", sc.URL.Path)
 		return errors.New("playback disabled")

@@ -199,3 +199,7 @@ func rtmpURL(raw string) (*url.URL, error) {
 		Fragment: key,
 	}, nil
 }
+
+// RedactURL hides credentials, query values and (for RTMP) the stream key
+// of a push target URL, for display.
+func RedactURL(raw string) string { return redactURL(raw) }

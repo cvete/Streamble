@@ -59,25 +59,30 @@ type Status struct {
 	Reconnects int       `json:"reconnects"`
 }
 
-// Manager starts and stops push targets as streams come and go.
+// Manager starts and stops push targets as streams come and go, and as
+// targets are added, changed or removed in the configuration (Reconcile).
 // It implements core.Hook.
 type Manager struct {
-	cfg *config.Config
+	cfg config.Getter
 	log *slog.Logger
+	// OnState, when set before streams are published, is called whenever a
+	// target changes state (outside the manager's locks).
+	OnState func(Status)
 
 	mu      sync.Mutex
-	streams map[*core.Stream]*streamPush
+	streams map[*core.Stream]*streamPush // every live stream, with or without targets
 	closed  bool
 	wg      sync.WaitGroup
 }
 
 type streamPush struct {
+	ctx     context.Context
 	cancel  context.CancelFunc
-	targets []*target
+	targets map[string]*target // by targetKey
 }
 
 // NewManager creates a Manager.
-func NewManager(cfg *config.Config, log *slog.Logger) *Manager {
+func NewManager(cfg config.Getter, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -87,24 +92,53 @@ func NewManager(cfg *config.Config, log *slog.Logger) *Manager {
 // OnPublish implements core.Hook. It starts one goroutine per matching
 // target and returns immediately.
 func (m *Manager) OnPublish(s *core.Stream) {
-	app, name, pushes := selectPushes(m.cfg, s)
-	if len(pushes) == 0 {
-		return
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	sp := &streamPush{cancel: cancel}
+	sp := &streamPush{ctx: ctx, cancel: cancel, targets: map[string]*target{}}
+	m.streams[s] = sp
+	m.reconcileLocked(s, sp)
+}
+
+// Reconcile applies the current configuration to every live stream:
+// new targets start, removed or disabled ones stop, and unchanged ones keep
+// running without interruption. Call it after the configuration changes.
+func (m *Manager) Reconcile() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
+	for s, sp := range m.streams {
+		m.reconcileLocked(s, sp)
+	}
+}
+
+func targetKey(p config.Push, raw string) string { return p.Name + "\x00" + raw }
+
+func (m *Manager) reconcileLocked(s *core.Stream, sp *streamPush) {
+	app, name, pushes := selectPushes(m.cfg(), s)
+	want := map[string]bool{}
 	for _, p := range pushes {
+		if p.Disabled {
+			continue
+		}
 		raw := expand(p.URL, app, name)
+		key := targetKey(p, raw)
+		want[key] = true
+		if sp.targets[key] != nil {
+			continue
+		}
+		ctx, cancel := context.WithCancel(sp.ctx)
 		t := &target{
 			stream:  s,
 			rawURL:  raw,
 			secrets: secretsOf(raw),
+			cancel:  cancel,
+			onState: m.OnState,
 			status: Status{
 				Stream: s.Path,
 				Name:   targetName(p, raw),
@@ -114,14 +148,20 @@ func (m *Manager) OnPublish(s *core.Stream) {
 			},
 		}
 		t.log = m.log.With("path", s.Path, "target", t.status.Name, "url", t.status.URL)
-		sp.targets = append(sp.targets, t)
+		sp.targets[key] = t
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
 			t.run(ctx)
 		}()
 	}
-	m.streams[s] = sp
+	for key, t := range sp.targets {
+		if !want[key] {
+			t.log.Info("push target removed from configuration, stopping")
+			t.cancel()
+			delete(sp.targets, key)
+		}
+	}
 }
 
 // OnUnpublish implements core.Hook. It stops the stream's targets without
@@ -211,6 +251,8 @@ type target struct {
 	rawURL  string
 	secrets []string
 	log     *slog.Logger
+	cancel  context.CancelFunc
+	onState func(Status)
 
 	mu        sync.Mutex
 	status    Status
@@ -232,13 +274,17 @@ func (t *target) snapshot() Status {
 
 func (t *target) setState(state string, err error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.status.State != state {
+	changed := t.status.State != state
+	if changed {
 		t.status.State = state
 		t.status.Since = time.Now()
 	}
 	if err != nil {
 		t.status.LastError = scrub(err.Error(), t.secrets)
+	}
+	t.mu.Unlock()
+	if changed && t.onState != nil {
+		t.onState(t.snapshot())
 	}
 }
 

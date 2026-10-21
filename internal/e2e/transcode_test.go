@@ -51,7 +51,7 @@ func transStart(t *testing.T, ffmpegPath string, p config.Profile) *transEnv {
 	}
 	hub := core.NewHub(log)
 	hm := hls.NewManager(cfg.HLS, "*", log)
-	tm := transcode.NewManager(cfg, hub, log)
+	tm := transcode.NewManager(config.Static(cfg), hub, log)
 	hm.ABR = func(path string) []string {
 		var out []string
 		for _, r := range tm.Renditions(path) {

@@ -323,7 +323,7 @@ func TestManagerLifecycle(t *testing.T) {
 		{Name: "radio", URL: "icecast://source:pw@127.0.0.1:1/{stream}"}, // no audio: fails permanently
 	}}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	m := NewManager(cfg, log)
+	m := NewManager(config.Static(cfg), log)
 	hub := core.NewHub(log)
 	hub.AddHook(m)
 

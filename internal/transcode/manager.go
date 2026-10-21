@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -61,7 +62,11 @@ type Rendition struct {
 // Manager starts a job for every stream published in an app with a
 // transcode profile. It implements core.Hook.
 type Manager struct {
-	cfg *config.Config
+	// OnState, when set before streams are published, is called whenever
+	// a job changes state.
+	OnState func(Status)
+
+	cfg config.Getter
 	hub *core.Hub
 	log *slog.Logger
 
@@ -72,24 +77,68 @@ type Manager struct {
 }
 
 // NewManager creates a Manager.
-func NewManager(cfg *config.Config, hub *core.Hub, log *slog.Logger) *Manager {
+func NewManager(cfg config.Getter, hub *core.Hub, log *slog.Logger) *Manager {
 	return &Manager{cfg: cfg, hub: hub, log: log, jobs: make(map[*core.Stream]*job)}
 }
 
 // OnPublish implements core.Hook.
 func (m *Manager) OnPublish(s *core.Stream) {
+	if profile := m.profileFor(s); profile != nil {
+		m.start(s, profile)
+	}
+}
+
+// profileFor returns the profile that currently applies to a stream, or
+// nil. Snapshots are immutable, so the pointer stays valid.
+func (m *Manager) profileFor(s *core.Stream) *config.Profile {
 	if s.Source.Protocol == ProtocolTranscode {
-		return
+		return nil
 	}
-	appName, streamName, _ := strings.Cut(s.Path, "/")
-	app := m.cfg.App(appName)
+	cfg := m.cfg()
+	appName, _, _ := strings.Cut(s.Path, "/")
+	app := cfg.App(appName)
 	if app == nil || app.Transcode == "" {
-		return
+		return nil
 	}
-	profile := m.cfg.Profile(app.Transcode)
-	if profile == nil {
-		return
+	return cfg.Profile(app.Transcode)
+}
+
+// Reconcile applies the current configuration to live streams: jobs whose
+// profile changed or was removed stop (and restart with the new profile
+// once their renditions are gone), and streams that gained a profile start
+// transcoding. Unchanged jobs are not touched.
+func (m *Manager) Reconcile() {
+	for _, s := range m.hub.Streams() {
+		want := m.profileFor(s)
+		m.mu.Lock()
+		j := m.jobs[s]
+		closed := m.closed
+		m.mu.Unlock()
+		if closed {
+			return
+		}
+		switch {
+		case j == nil && want != nil:
+			m.start(s, want)
+		case j != nil && (want == nil || !reflect.DeepEqual(*want, *j.profile)):
+			j.log.Info("transcode profile changed, restarting")
+			j.cancel()
+			if want != nil {
+				go func() {
+					<-j.done // the old renditions must be unpublished first
+					if m.hub.Lookup(s.Path) == s {
+						if p := m.profileFor(s); p != nil {
+							m.start(s, p)
+						}
+					}
+				}()
+			}
+		}
 	}
+}
+
+func (m *Manager) start(s *core.Stream, profile *config.Profile) {
+	appName, streamName, _ := strings.Cut(s.Path, "/")
 
 	var srcVideo, srcAudio bool
 	for _, t := range s.Tracks {
@@ -110,6 +159,7 @@ func (m *Manager) OnPublish(s *core.Stream) {
 		m:       m,
 		stream:  s,
 		profile: profile,
+		done:    make(chan struct{}),
 		outs:    outs,
 		base:    appName + "/" + streamName,
 		ctx:     ctx,
@@ -120,7 +170,7 @@ func (m *Manager) OnPublish(s *core.Stream) {
 	}
 
 	m.mu.Lock()
-	if m.closed {
+	if m.closed || m.jobs[s] != nil {
 		m.mu.Unlock()
 		cancel()
 		return
@@ -131,6 +181,7 @@ func (m *Manager) OnPublish(s *core.Stream) {
 
 	go func() {
 		defer m.wg.Done()
+		defer close(j.done)
 		j.run()
 		m.mu.Lock()
 		if m.jobs[s] == j {
@@ -206,6 +257,7 @@ type job struct {
 	m       *Manager
 	stream  *core.Stream
 	profile *config.Profile
+	done    chan struct{} // closed when run has returned
 	outs    []output
 	base    string
 	ctx     context.Context
@@ -223,13 +275,17 @@ func (j *job) renditionPath(o output) string { return j.base + "_" + o.Rendition
 
 func (j *job) setState(state, lastErr string) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.state != state {
+	changed := j.state != state
+	if changed {
 		j.state = state
 		j.since = time.Now()
 	}
 	if lastErr != "" {
 		j.lastError = lastErr
+	}
+	j.mu.Unlock()
+	if changed && j.m.OnState != nil {
+		j.m.OnState(j.status())
 	}
 }
 
@@ -289,7 +345,7 @@ func (j *job) runOnce() error {
 	}
 	defer sub.Close()
 
-	ffmpeg := j.m.cfg.Transcode.FFmpeg
+	ffmpeg := j.m.cfg().Transcode.FFmpeg
 	if ffmpeg == "" {
 		ffmpeg = "ffmpeg"
 	}
@@ -423,4 +479,38 @@ func (t *tailBuffer) last() string {
 		return ""
 	}
 	return t.lines[len(t.lines)-1]
+}
+
+// Restart restarts the job of a source stream, or of the source of a
+// rendition path. It reports false when no job matches.
+func (m *Manager) Restart(path string) bool {
+	m.mu.Lock()
+	var target *job
+	for _, j := range m.jobs {
+		if j.stream.Path == path {
+			target = j
+			break
+		}
+		for _, o := range j.outs {
+			if j.renditionPath(o) == path {
+				target = j
+			}
+		}
+	}
+	m.mu.Unlock()
+	if target == nil {
+		return false
+	}
+	s := target.stream
+	target.log.Info("transcode restart requested")
+	target.cancel()
+	go func() {
+		<-target.done
+		if m.hub.Lookup(s.Path) == s {
+			if p := m.profileFor(s); p != nil {
+				m.start(s, p)
+			}
+		}
+	}()
+	return true
 }

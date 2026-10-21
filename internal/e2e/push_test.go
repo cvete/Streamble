@@ -56,7 +56,7 @@ func pushStartServer(t *testing.T, apps ...config.App) *pushServer {
 	ps := &pushServer{hub: core.NewHub(log), authz: auth.New(cfg), log: log}
 	hm := hls.NewManager(cfg.HLS, "*", log)
 	ps.hub.AddHook(hm)
-	ps.push = push.NewManager(cfg, log)
+	ps.push = push.NewManager(config.Static(cfg), log)
 	ps.hub.AddHook(ps.push)
 	t.Cleanup(ps.push.Close)
 
