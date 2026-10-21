@@ -1,0 +1,15 @@
+services:
+  streamble:
+    build: .
+    image: streamble:latest
+    restart: unless-stopped
+    command: ["-config", "/etc/streamble/streamble.yml"]
+    ports:
+      - "1935:1935/tcp"   # RTMP ingest
+      - "8890:8890/udp"   # SRT ingest
+      - "8080:8080/tcp"   # HLS, API, monitor
+    volumes:
+      - ./streamble.yml:/etc/streamble/streamble.yml:ro
+    env_file:
+      - path: .env
+        required: false

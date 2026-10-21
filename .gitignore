@@ -1,0 +1,10 @@
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+/streamble.yml
+.env
+.DS_Store
+.idea/
+.vscode/

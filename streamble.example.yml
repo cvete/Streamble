@@ -1,0 +1,46 @@
+# Streamble configuration.
+# Copy to streamble.yml and run:  streamble -config streamble.yml
+# Every setting is optional; the values below are the defaults unless noted.
+# ${VAR} is replaced with the environment variable VAR, so secrets can live
+# outside this file.
+
+log_level: info            # debug, info, warn, error
+
+rtmp:
+  enabled: true
+  listen: ":1935"          # OBS: server rtmp://host/<app>, key <stream>?key=<publish_key>
+
+srt:
+  enabled: true
+  listen: ":8890"          # UDP. Caller mode, streamid=<app>/<stream>?key=<publish_key>
+  latency_ms: 200          # raise on lossy or long-distance links
+
+http:
+  listen: ":8080"          # HLS playback, API and the monitor page at /
+  allow_origin: "*"        # CORS for web players on other domains
+  api_token: ""            # set to require "Authorization: Bearer <token>" on /api/
+
+hls:
+  # llhls  - Apple Low-Latency HLS (fMP4 parts), about 2-4 s latency
+  # fmp4   - standard HLS with fMP4 segments, best for CDNs
+  # mpegts - classic HLS with .ts segments, widest device support (H.264 + AAC only)
+  variants: [llhls, mpegts]
+  primary: llhls           # served at /<app>/<stream>/index.m3u8
+  segment_count: 7         # at least 7 when llhls is enabled
+  segment_duration: 2s     # minimum; segments always start on a keyframe
+  part_duration: 200ms     # LL-HLS part length
+
+# Apps group streams: rtmp://host/live/tv1 publishes stream "tv1" in app "live".
+# An app without publish_key accepts any publisher.
+apps:
+  - name: live
+    publish_key: ${STREAMBLE_LIVE_KEY}     # example: shared key for the app
+    stream_keys:                           # optional per-stream keys (override publish_key)
+      tv1: ${STREAMBLE_TV1_KEY}
+
+  - name: radio
+    publish_key: ${STREAMBLE_RADIO_KEY}
+
+  # - name: secure
+  #   publish_key: change-me
+  #   srt_passphrase: "at-least-10-characters"   # SRT encryption, 10 to 79 chars
