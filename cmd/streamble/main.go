@@ -29,6 +29,7 @@ import (
 	"github.com/cvete/streamble/internal/output/push"
 	"github.com/cvete/streamble/internal/panel"
 	"github.com/cvete/streamble/internal/settings"
+	"github.com/cvete/streamble/internal/stats"
 	"github.com/cvete/streamble/internal/store"
 	"github.com/cvete/streamble/internal/transcode"
 	"github.com/cvete/streamble/internal/users"
@@ -154,6 +155,19 @@ func run() error {
 		return fmt.Errorf("creating the first admin: %w", err)
 	}
 
+	// Viewer countries need a GeoLite2 Country database (optional).
+	var geo *stats.GeoIP
+	if cfg.GeoIP.Database != "" {
+		geo, err = stats.OpenGeoIP(cfg.GeoIP.Database)
+		if err != nil {
+			return fmt.Errorf("geoip: %w", err)
+		}
+		closers = append(closers, func() { geo.Close() })
+		hlsManager.Country = geo.Country
+		streams.Country = geo.Country
+		log.Info("GeoIP country lookups enabled", "database", cfg.GeoIP.Database)
+	}
+
 	statusAPI := api.New(api.Options{
 		Hub:       hub,
 		HLS:       hlsManager,
@@ -168,6 +182,30 @@ func run() error {
 	closers = append(closers, statusAPI.Close)
 	statusAPI.AddStatus("transcodes", func() any { return transcoder.Status() })
 	statusAPI.AddStatus("pushes", func() any { return pusher.Status() })
+
+	recorder := &stats.Recorder{
+		DB:            db,
+		Hub:           hub,
+		Viewers:       statusAPI.Viewers,
+		Bitrates:      statusAPI.Bitrates,
+		RetentionDays: cfg.Stats.RetentionDays,
+		Log:           log,
+	}
+	if geo != nil {
+		recorder.Countries = func(path string) map[string]int {
+			out := hlsManager.ViewersByCountry(path)
+			if out == nil {
+				out = map[string]int{}
+			}
+			for c, n := range streams.ListenersByCountry(path) {
+				out[c] += n
+			}
+			return out
+		}
+	}
+	recorder.Start()
+	closers = append(closers, recorder.Close) // writes the partial minute
+	stats.Register(statusAPI, recorder, geo)
 
 	// Pull sources last, once every hook is registered, so pulled streams
 	// get HLS, transcoding and restreaming like any other.

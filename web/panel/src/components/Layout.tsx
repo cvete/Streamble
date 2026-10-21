@@ -79,7 +79,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <span className="strip-item" title="Streams on air">
             <Tally tone={o && o.streams > 0 ? 'on' : 'off'} />
             <span className="v">{o ? o.sources : '–'}</span>
-            <span className="k">on air{o && o.streams > o.sources ? ` + ${o.streams - o.sources} renditions` : ''}</span>
+            <span className="k">on air<span className="hide-s">{o && o.streams > o.sources ? ` + ${o.streams - o.sources} renditions` : ''}</span></span>
           </span>
           <span className="strip-item">
             <span className="v">{o ? number(o.viewers) : '–'}</span><span className="k">viewers</span>

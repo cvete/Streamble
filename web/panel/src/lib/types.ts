@@ -196,7 +196,7 @@ export interface AuditEntry {
 }
 
 export interface StatsPoint {
-  ts: number;
+  ts: number; // unix ms, start of the bucket
   viewers: number;
   viewers_max: number;
   bitrate_in_kbps: number;

@@ -3,8 +3,8 @@ package push
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/cvete/streamble/internal/config"

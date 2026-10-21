@@ -33,23 +33,23 @@ function RenditionsTable({ rs, onChange }: { rs: Rendition[]; onChange: (r: Rend
               <tr key={i}>
                 <td><input type="text" value={r.name} onChange={(e) => set(i, { name: e.target.value })} aria-label="Rendition name" style={{ width: 90 }} /></td>
                 <td>
-                  <select value={r.audio_only ? 'audio' : 'video'} aria-label="Kind" onChange={(e) => set(i, e.target.value === 'audio'
+                  <select value={r.audio_only ? 'audio' : 'video'} aria-label="Kind" style={{ width: 150 }} onChange={(e) => set(i, e.target.value === 'audio'
                     ? { audio_only: true, height: 0, fps: 0, video_bitrate: '' }
                     : { audio_only: false, audio_codec: 'aac' })}>
                     <option value="video">Video</option>
                     <option value="audio">Radio (audio only)</option>
                   </select>
                 </td>
-                <td><input type="number" min={0} value={r.height || ''} placeholder="source" disabled={r.audio_only}
+                <td><input type="number" min={0} value={r.height || ''} placeholder="any" disabled={r.audio_only}
                   onChange={(e) => set(i, { height: Number(e.target.value) })} aria-label="Height" style={{ width: 80 }} /></td>
-                <td><input type="number" min={0} value={r.fps || ''} placeholder="source" disabled={r.audio_only}
+                <td><input type="number" min={0} value={r.fps || ''} placeholder="any" disabled={r.audio_only}
                   onChange={(e) => set(i, { fps: Number(e.target.value) })} aria-label="Max fps" style={{ width: 70 }} /></td>
                 <td><input type="text" value={r.video_bitrate} disabled={r.audio_only} placeholder="2500k"
                   onChange={(e) => set(i, { video_bitrate: e.target.value })} aria-label="Video bitrate" style={{ width: 80 }} /></td>
                 <td><input type="text" value={r.audio_bitrate} placeholder="128k"
                   onChange={(e) => set(i, { audio_bitrate: e.target.value })} aria-label="Audio bitrate" style={{ width: 70 }} /></td>
                 <td>
-                  <select value={r.audio_codec || 'aac'} aria-label="Audio codec" onChange={(e) => set(i, { audio_codec: e.target.value })}>
+                  <select value={r.audio_codec || 'aac'} aria-label="Audio codec" style={{ width: 80 }} onChange={(e) => set(i, { audio_codec: e.target.value })}>
                     <option value="aac">AAC</option>
                     {r.audio_only && <option value="mp3">MP3</option>}
                   </select>

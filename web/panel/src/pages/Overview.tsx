@@ -29,7 +29,7 @@ function Tile({ s, picture, history }: { s: Stream; picture: boolean; history: n
           <span className="chip onair">On air</span>
           <span className="chip">{s.protocol.toUpperCase()}</span>
           {audioOnly && <span className="chip">Radio</span>}
-          {s.renditions && <span className="chip">{s.renditions.length} renditions</span>}
+          {s.renditions && <span className="chip">{s.renditions.length} {s.renditions.length === 1 ? 'rendition' : 'renditions'}</span>}
         </div>
       </div>
       <div className="umd">
