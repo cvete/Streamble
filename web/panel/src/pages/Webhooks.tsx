@@ -4,7 +4,7 @@ import { del, post, put, seg } from '../lib/api';
 import { useAction, useApi } from '../lib/hooks';
 import { dateTime } from '../lib/format';
 import type { Delivery, Webhook } from '../lib/types';
-import { Confirm, Dialog, Empty, ErrorNotice, Field, PageHead, SecretField, StateLabel, Switch } from '../components/ui';
+import { Confirm, Dialog, Empty, ErrorNotice, Field, PageHead, SecretField, StateLabel, Switch, Tally } from '../components/ui';
 
 const eventHelp: Record<string, string> = {
   'stream.published': 'A stream went on air',
@@ -87,7 +87,9 @@ function Deliveries({ name }: { name: string }) {
               <tr key={d.id}>
                 <td className="nowrap muted">{dateTime(d.at)}</td>
                 <td><code>{d.event}</code></td>
-                <td>{d.status >= 200 && d.status < 300 ? <StateLabel state="live" title={'HTTP ' + d.status} /> : <StateLabel state="failed" title={d.error} />}
+                <td>{d.status >= 200 && d.status < 300
+                  ? <span className="state"><Tally tone="ok" />Delivered</span>
+                  : <span className="state" style={{ color: 'var(--bad)' }}><Tally tone="bad" />Failed</span>}
                   <span className="muted" style={{ marginLeft: 6 }}>{d.status ? 'HTTP ' + d.status : d.error}</span></td>
                 <td className="num muted">{d.attempts > 1 ? d.attempts + ' tries · ' : ''}{d.duration_ms} ms</td>
               </tr>

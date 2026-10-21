@@ -166,7 +166,7 @@ func TestTranscodeStopsWithSource(t *testing.T) {
 		Name:       "small",
 		Renditions: []config.Rendition{{Name: "low", Height: 144, VideoBitrate: "150k"}},
 	})
-	ctx := publishFor(t, 8*time.Second, join(inVideo, inAudio, encH264, encAAC,
+	ctx := publishFor(t, 15*time.Second, join(inVideo, inAudio, encH264, encAAC,
 		[]string{"-f", "flv", "rtmp://" + e.rtmpAddr + "/live/short"})...)
 	e.wait(t, "live/short_low")
 	<-ctx

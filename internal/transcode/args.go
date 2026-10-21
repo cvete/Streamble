@@ -55,6 +55,9 @@ func buildArgs(p *config.Profile, outs []output) []string {
 	}
 	args = append(args,
 		"-fflags", "+genpts",
+		// Probe 2 s instead of FFmpeg's default 5 s so renditions start
+		// sooner; the hub already knows the tracks before FFmpeg starts.
+		"-analyzeduration", "2000000",
 		"-f", "mpegts", "-i", "pipe:0",
 	)
 
