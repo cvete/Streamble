@@ -9,10 +9,10 @@ SRT, while restreaming to YouTube, Twitch, Facebook or Icecast.
 It is a single binary, licensed under the AGPL-3.0. FFmpeg is only needed
 for transcoding.
 
-> **Status: early development (milestone 2 of 5).** Everything listed below
+> **Status: early development (milestone 3 of 5).** Everything listed below
 > works and is covered by end-to-end tests with real FFmpeg streams, but has
-> not yet been run in production. The control panel, recording and edge mode
-> are next; see [ROADMAP.md](ROADMAP.md).
+> not yet been run in production. Recording, DVR and edge mode are next; see
+> [ROADMAP.md](ROADMAP.md).
 
 ## What it does
 
@@ -24,8 +24,10 @@ for transcoding.
 | **Transcode** | FFmpeg quality ladders on CPU or GPU (NVENC, QSV, VAAPI), MP2/AC-3/MP3 to AAC for web players, MP3 renditions for radio, adaptive bitrate playlist |
 | **Playback** | Apple Low-Latency HLS, fMP4 HLS, MPEG-TS HLS, continuous `.ts` over HTTP, `.mp3` and `.aac` radio streams, RTMP, SRT |
 | **Restream** | RTMP/RTMPS (YouTube, Twitch, Facebook, any server), SRT, Icecast (MP3/AAC), with automatic reconnect |
-| **Security** | Publish keys, play keys, SRT passphrases, API token; keys never appear in logs |
-| **Monitoring** | JSON API for streams, bitrates, viewers, transcoders, restreams and pull sources; built-in monitor and test player |
+| **Security** | Publish keys, play keys, SRT passphrases, auth callbacks to your own service, users with roles, API tokens, audit log; keys never appear in logs |
+| **Control panel** | Built-in web panel: multiviewer of every channel on air, apps and keys, transcoding profiles, restream targets, pull sources, statistics, webhooks, users. Changes apply live without dropping streams |
+| **Statistics** | Viewers and bandwidth per minute for every stream, kept in SQLite or PostgreSQL; viewer countries with a free GeoLite2 database |
+| **Integration** | REST API for everything the panel does, webhooks for stream events (signed with HMAC) |
 
 ## Quick start
 
@@ -42,7 +44,9 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine \
   -f flv rtmp://localhost:1935/live/test
 ```
 
-Open <http://localhost:8080> to see it on air and play it.
+Open <http://localhost:8080> for the control panel. On first start the
+server prints a password for the `admin` account (or set
+`STREAMBLE_ADMIN_PASSWORD`); you choose your own password at first sign-in.
 
 ### Docker
 
@@ -51,13 +55,14 @@ cp streamble.example.yml streamble.yml   # edit keys, profiles, targets
 docker compose up -d
 ```
 
-The Docker image does not include FFmpeg yet; install it on the host and run
-the binary directly if you need transcoding.
+The image includes FFmpeg. Settings and statistics are stored in the
+`streamble-data` volume.
 
 ## Publishing
 
 Streams live under an **app**: `live/tv1` is stream `tv1` in app `live`.
-Apps are defined in the config file.
+Apps are created in the control panel (Apps and keys), through the API, or
+in the config file.
 
 **OBS / vMix (RTMP)**
 
@@ -160,19 +165,35 @@ and run `streamble -config streamble.yml` (or set `STREAMBLE_CONFIG`).
 kept out of the file. An unset variable is left as literal text rather than
 becoming an empty key, so an app never becomes open by accident.
 
+Settings come in two kinds:
+
+- **Server settings** (listeners, HLS, storage, panel, GeoIP) are read from
+  the file at start and need a restart.
+- **Live settings** (apps and keys, transcoding profiles, restream targets,
+  pull sources, webhooks, playback switches) live in the database. On the
+  very first start they are imported from the file; after that the panel and
+  the API are the place to change them, and changes apply immediately
+  without dropping streams.
+
+Storage is SQLite by default (`data/streamble.db`). For PostgreSQL:
+
+```yaml
+storage:
+  driver: postgres
+  dsn: ${STREAMBLE_DATABASE_URL}   # postgres://user:pass@host:5432/streamble
+```
+
 ## API
 
-| Endpoint | |
-|---|---|
-| `GET /api/v1/health` | Liveness probe, always public |
-| `GET /api/v1/streams` | Live streams with tracks, bitrates, viewers and playback URLs |
-| `GET /api/v1/streams/{app}/{stream}` | One stream |
-| `GET /api/v1/transcodes` | Transcode jobs |
-| `GET /api/v1/pushes` | Restream targets |
-| `GET /api/v1/sources` | Pull sources |
-| `GET /api/v1/version` | Version, licence and source URL |
+Everything the panel does is available over a REST API under `/api/v1/`;
+see [docs/API.md](docs/API.md). Scripts authenticate with an API token
+created under Account in the panel: `Authorization: Bearer stb_…`.
+`GET /api/v1/health` is always public.
 
-Set `http.api_token` to require `Authorization: Bearer <token>`.
+Webhooks POST a JSON event to your URL when a stream starts or stops, a
+restream or pull source changes state, or a transcoder fails, signed with
+`X-Streamble-Signature: sha256=<HMAC>`. An app's `auth_url` lets your own
+service approve or refuse every publish and play.
 
 Viewer counts combine HLS players (estimated from playlist requests over the
 last 30 seconds) and connected `.ts`/`.mp3`/`.aac` listeners. Behind a CDN the
@@ -193,6 +214,7 @@ planned for milestone 5.
 make test         # unit + end-to-end tests (needs ffmpeg with libx264, libmp3lame, srt)
 make test-short   # unit tests only
 make lint
+make ui           # rebuild the control panel (needs Node.js 22) after changing web/panel
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit

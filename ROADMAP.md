@@ -39,13 +39,14 @@ file current: tick items as they land and add new ones as they come up.
 
 ## Milestone 3: control panel
 
-- [ ] Postgres storage; config editable at runtime, hot reload without dropping streams
-- [ ] Web UI: apps, streams, keys, transcode profiles, restream targets, pull sources
-- [ ] Monitor page: show renditions, restream and pull status
-- [ ] Users and roles
-- [ ] Stats history: viewers, bandwidth, countries (GeoLite2), per stream and app
-- [ ] Webhooks: publish start/stop, auth callbacks
-- [ ] REST API for everything the UI does
+- [x] Postgres storage; config editable at runtime, hot reload without dropping streams
+- [x] Web UI: apps, streams, keys, transcode profiles, restream targets, pull sources
+- [x] Monitor page: show renditions, restream and pull status
+- [x] Users and roles
+- [x] Stats history: viewers, bandwidth, countries (GeoLite2), per stream and for the whole server
+- [ ] Stats totals per app (follow-up)
+- [x] Webhooks: publish start/stop, auth callbacks
+- [x] REST API for everything the UI does
 
 ## Milestone 4: recording, VOD and protection
 

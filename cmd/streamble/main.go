@@ -33,6 +33,7 @@ import (
 	"github.com/cvete/streamble/internal/store"
 	"github.com/cvete/streamble/internal/transcode"
 	"github.com/cvete/streamble/internal/users"
+	"github.com/cvete/streamble/internal/webhooks"
 )
 
 func main() {
@@ -85,6 +86,7 @@ func run() error {
 	bus := events.NewBus()
 	hub := core.NewHub(log)
 	authz := auth.NewDynamic(get)
+	authz.Log = log.With("module", "auth") // auth callback decisions
 
 	hlsManager := hls.NewManager(cfg.HLS, cfg.HTTP.AllowOrigin, log)
 	hub.AddHook(hlsManager)
@@ -206,6 +208,12 @@ func run() error {
 	recorder.Start()
 	closers = append(closers, recorder.Close) // writes the partial minute
 	stats.Register(statusAPI, recorder, geo)
+
+	// Webhooks: stream events are POSTed to the configured URLs.
+	hooks := &webhooks.Dispatcher{Bus: bus, Settings: get, DB: db, Log: log.With("module", "webhooks")}
+	hooks.Start()
+	closers = append(closers, hooks.Close)
+	webhooks.Register(statusAPI, hooks)
 
 	// Pull sources last, once every hook is registered, so pulled streams
 	// get HLS, transcoding and restreaming like any other.

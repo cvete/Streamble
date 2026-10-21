@@ -191,12 +191,18 @@ Each enabled webhook receives matching events as
 `POST <url>` with body `{"id","type","at","data"}` and headers
 `X-Streamble-Event`, `X-Streamble-Delivery` and, when a secret is set,
 `X-Streamble-Signature: sha256=<hex HMAC-SHA256 of the body>`.
-Failures (network errors, 5xx) are retried after 1 s, 10 s and 60 s.
+Failures (network errors, 5xx) are retried after 1 s, 10 s and 60 s; 4xx
+is not retried. Requests carry `User-Agent: Streamble-Webhooks`. Each
+webhook has its own queue of 256 events; when a receiver is so slow that the
+queue fills, new events for it are dropped (and logged) rather than slowing
+the server. The newest 500 deliveries per webhook are kept. Event types:
+`stream.published`, `stream.ended`, `push.state`, `source.state`,
+`transcode.state`, and `ping` (sent only by the test endpoint).
 
 | | |
 |---|---|
 | `GET /api/v1/config/webhooks/{name}/deliveries` | `{"deliveries":[{"id","event","at","status","attempts","error","duration_ms"}]}` newest first |
-| `POST /api/v1/config/webhooks/{name}/test` | sends a `ping` event now and returns the delivery |
+| `POST /api/v1/config/webhooks/{name}/test` | sends a `ping` event now (once, no retries) and returns the delivery object |
 
 ### Auth callbacks
 

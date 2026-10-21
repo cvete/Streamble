@@ -74,7 +74,7 @@ function CountryBars({ rows, value, unit }: { rows: { country: string; v: number
 }
 
 export function Stats() {
-  const [range, setRange] = useStored('stats.range', '24h');
+  const [range, setRange] = useStored('stats.range', '6h');
   const [path, setPath] = useState('');
   const { snapshot } = useLive();
   const secs = ranges.find((r) => r.key === range)?.secs ?? 86400;
@@ -88,7 +88,7 @@ export function Stats() {
   const live = useApi<Countries>(`/stats/countries/live?path=${encodeURIComponent(path)}`);
 
   const points = series.data?.points ?? [];
-  const times = points.map((p) => p.ts / 1000);
+  const times = points.map((p) => Date.parse(p.ts) / 1000);
   const streamPaths = useMemo(() => {
     const set = new Set<string>((summary.data?.streams ?? []).map((s) => s.path));
     for (const s of snapshot?.streams ?? []) set.add(s.path);

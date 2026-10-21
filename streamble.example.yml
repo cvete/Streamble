@@ -3,8 +3,30 @@
 # Every setting is optional; the values below are the defaults unless noted.
 # ${VAR} is replaced with the environment variable VAR, so secrets can live
 # outside this file.
+#
+# Server settings (listeners, hls, storage, panel, stats, geoip) are read at
+# start. Live settings (playback, transcode profiles, apps, sources,
+# webhooks) are imported into the database on the FIRST start only; after
+# that, change them in the control panel or the API.
 
 log_level: info            # debug, info, warn, error
+
+storage:
+  driver: sqlite           # sqlite or postgres
+  dsn: data/streamble.db   # postgres: ${STREAMBLE_DATABASE_URL}, e.g. postgres://user:pass@host/streamble
+
+panel:
+  enabled: true            # control panel at http://host:8080/panel/
+  secure_cookies: false    # set true when the panel is served over HTTPS
+  session_ttl: 168h        # how long a sign-in lasts
+# First start: user "admin", password from STREAMBLE_ADMIN_PASSWORD or
+# printed in the log; it must be changed at first sign-in.
+
+stats:
+  retention_days: 30       # per-minute viewer and bandwidth history; 0 keeps it forever
+
+geoip:
+  database: ""             # path to a MaxMind GeoLite2-Country.mmdb for viewer countries
 
 rtmp:
   enabled: true
@@ -61,6 +83,8 @@ transcode:
 # An app without publish_key accepts any publisher.
 apps:
   - name: live
+    description: Main TV channels
+    # auth_url: https://example.com/streamble/auth   # optional: approve every publish and play
     publish_key: ${STREAMBLE_LIVE_KEY}     # example: shared key for the app
     stream_keys:                           # optional per-stream keys (override publish_key)
       tv1: ${STREAMBLE_TV1_KEY}
@@ -99,3 +123,11 @@ apps:
 #     url: srt://remote.example.com:9000?streamid=read:live/x&passphrase=...
 #   - path: live/mirror
 #     url: https://example.com/live/index.m3u8   # HLS
+
+# Webhooks: POST a JSON event to these URLs (signed with the secret).
+webhooks:
+  - name: chat-bot
+    url: https://example.com/hooks/streamble
+    secret: ${WEBHOOK_SECRET}
+    events: [stream.published, stream.ended]   # empty: every event
+    # also: push.state, source.state, transcode.state

@@ -7,9 +7,13 @@ services:
     ports:
       - "1935:1935/tcp"   # RTMP ingest
       - "8890:8890/udp"   # SRT ingest
-      - "8080:8080/tcp"   # HLS, API, monitor
+      - "8080:8080/tcp"   # HLS, API, control panel
     volumes:
       - ./streamble.yml:/etc/streamble/streamble.yml:ro
+      - streamble-data:/var/lib/streamble   # SQLite database (settings, users, stats)
     env_file:
       - path: .env
         required: false
+
+volumes:
+  streamble-data:

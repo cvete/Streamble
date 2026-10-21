@@ -57,5 +57,12 @@ ffmpeg -re -f lavfi -i testsrc2 -f lavfi -i sine -c:v libx264 -g 50 \
 curl localhost:8080/api/v1/streams
 ```
 
+The control panel lives in `web/panel` (React + Vite). `make ui` builds it
+into `internal/panel/dist`, which is committed and embedded with go:embed:
+rebuild the Go binary after `make ui` to see changes, and commit the dist
+(CI checks it is current). The panel only talks to the public API; add an
+endpoint (and document it in `docs/API.md`) rather than a private route.
+API times are RFC 3339 strings, including stats bucket `ts`.
+
 When stopping the server in scripts, use `pkill -x streamble`; `pkill -f`
 matches the shell running the script and kills it too.

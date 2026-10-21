@@ -150,12 +150,81 @@ targets. Names are restricted to `[A-Za-z0-9_.-]`, never
 starting with a dot, which keeps paths safe for HTTP routing and future
 file storage. Keys are compared in constant time and never logged.
 
-### API (`internal/api`) and monitor (`internal/web`)
+### Storage (`internal/store`)
 
-Read-only JSON status API plus a single embedded HTML page (monitor and
-test player using hls.js from a CDN). Bitrates are sampled every 2 seconds.
-Modules register their status with `API.AddStatus` (`/api/v1/transcodes`,
-`/pushes`, `/sources`).
+`database/sql` over SQLite (modernc.org/sqlite, pure Go, one connection, WAL)
+or PostgreSQL (pgx). Queries are written once with `?` placeholders and
+rewritten to `$n` for PostgreSQL; only portable SQL is used (TEXT and BIGINT
+columns, times as Unix milliseconds). Packages add tables with
+`store.Register(Migration{ID, SQL})`; migrations run in ID order at start.
+
+### Live settings (`internal/settings`)
+
+The config is split. Server settings (listeners, HLS, storage, panel, GeoIP)
+come from the file and are fixed for the process. Runtime settings (apps,
+profiles, sources, webhooks, playback) are stored as JSON rows in
+`runtime_items`; on the first start they are imported from the file, after
+that the database wins. `settings.Store.Update` validates a change, saves it
+in one transaction, swaps an immutable `*config.Config` snapshot and then
+notifies subscribers. Components read through `config.Getter` and
+reconcile instead of restarting:
+
+- push: targets are keyed by name + URL; only added, changed or removed
+  targets start or stop, other restreams keep running.
+- transcode: a live stream whose profile changed (or was removed from its
+  app) has its FFmpeg job restarted.
+- pull: added sources start, changed or disabled ones stop.
+- auth: keys and auth callbacks are read per connection, so a new key
+  applies to the next publish; live publishers are not disconnected.
+
+### Accounts (`internal/users`)
+
+Users with roles viewer < operator < admin, bcrypt passwords, server-side
+sessions (only a SHA-256 of the cookie token is stored), API tokens
+(`stb_…`, also stored hashed), a login rate limit per IP and an audit log.
+Cookie requests that change something must send `X-Streamble-Request`,
+which a cross-site form cannot, as CSRF protection. The first admin's
+password must be changed at first sign-in.
+
+### API (`internal/api`), events (`internal/events`)
+
+The REST API (see `docs/API.md`) routes every handler through one
+`Route(pattern, role, fn)` that authenticates, checks CSRF, the role and the
+forced password change. Viewers get secrets masked as `********`; writes that
+send the mask back keep the stored value. `events.Bus` is a non-blocking
+fan-out of stream, push, source and transcode state changes; the API streams
+it to the panel over Server-Sent Events (`/api/v1/events`) together with a
+status snapshot every 2 seconds. Modules add routes on the same API
+(`stats.Register`, `webhooks.Register`).
+
+### Statistics (`internal/stats`)
+
+A recorder samples viewers, bitrates and byte counters every 10 seconds and
+writes one row per stream (and one for the whole server) per minute.
+Renditions' input is not counted twice in the server row. Queries bucket by
+1 minute up to 6 hours, 15 minutes up to 7 days, and 1 hour beyond. Viewer
+countries come from a MaxMind GeoLite2 Country database when configured,
+looked up once per viewer; addresses are never stored. Old rows are deleted
+after `stats.retention_days`.
+
+### Webhooks (`internal/webhooks`) and auth callbacks (`internal/auth`)
+
+The dispatcher reads bus events and POSTs them to every matching webhook,
+one worker and a bounded queue per webhook so a slow receiver never blocks
+the server or other webhooks. Bodies are signed with HMAC-SHA256 when a
+secret is set; 5xx and network errors are retried (1 s, 10 s, 60 s). Every
+delivery is recorded. An app's `auth_url` is called after the key check for
+every publish and play; anything but a 2xx, or no answer within 3 seconds,
+refuses the connection.
+
+### Control panel (`web/panel`, `internal/panel`)
+
+React + TypeScript, built with Vite into `internal/panel/dist`, which is
+committed and embedded with `go:embed`, so building the server needs no
+Node.js. Served at `/panel/` with a strict Content-Security-Policy; it only
+uses the public API. hls.js is loaded on demand for the players. Run
+`make ui` after changing `web/panel`; CI fails when the committed build is
+out of date.
 
 ## Key decisions
 
@@ -165,7 +234,8 @@ Modules register their status with `API.AddStatus` (`/api/v1/transcodes`,
 | Media libraries | bluenviron (MIT), gosrt (MIT) | Mature, maintained, used in production by MediaMTX. MIT is compatible with AGPL. |
 | Transcoding | FFmpeg as a supervised child process, MPEG-TS over pipes | GPU support (NVENC, QSV, VAAPI) for free, crash isolation, keeps codec licensing out of our binary. |
 | Scale (planned) | Origin + edge caches or CDN | 5,000 viewers at 3 Mbps is ~15 Gbps; no single server should carry that. |
-| Panel (planned) | Built into the same binary, Postgres for config and stats | One install, no separate services to run. |
+| Panel | Built into the same binary; SQLite by default, PostgreSQL optional | One install, no separate services to run; PostgreSQL for operators who already run it or want external backups. |
+| Live config | Database is the source of truth after the first start | Panel edits must survive restarts; the YAML stays useful for first setup and automation. |
 | Licence | AGPL-3.0-only | Keeps hosted forks open. |
 
 ## Testing

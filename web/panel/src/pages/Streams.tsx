@@ -151,7 +151,7 @@ export function StreamDetail() {
             <div className="panel-head"><h3>Viewers, last 6 hours</h3></div>
             <div className="panel-body">
               {points.length > 1 ? (
-                <Chart times={points.map((p) => p.ts / 1000)} height={180} series={[
+                <Chart times={points.map((p) => Date.parse(p.ts) / 1000)} height={180} series={[
                   { label: 'Viewers', color: '#8fb6ff', values: points.map((p) => p.viewers), fill: true },
                   { label: 'Peak', color: '#f0a33a', values: points.map((p) => p.viewers_max) },
                 ]} />
