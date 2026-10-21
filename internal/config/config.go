@@ -83,9 +83,12 @@ type Rendition struct {
 type Push struct {
 	// Name identifies the target in logs and the API.
 	Name string `yaml:"name"`
-	// URL of the target. Supported schemes: rtmp, rtmps, srt, icecast
-	// (icecast://user:pass@host:8000/mount). "{app}" and "{stream}" are
-	// replaced with the stream's app and stream names.
+	// URL of the target. Supported schemes:
+	//   rtmp, rtmps  the last path segment (plus query) is the stream key,
+	//                e.g. rtmp://a.rtmp.youtube.com/live2/<key>
+	//   srt          caller mode; streamid and passphrase as query parameters
+	//   icecast, icecasts (TLS)  icecast://source:<password>@host:8000/mount
+	// "{app}" and "{stream}" are replaced with the stream's app and name.
 	URL string `yaml:"url"`
 	// Streams limits the target to these stream names; empty means every
 	// stream of the app.
@@ -304,8 +307,8 @@ func (c *Config) Validate() error {
 			switch {
 			case !ok:
 				add("app %q: push[%d] url must start with a scheme like rtmp://", a.Name, i)
-			case scheme != "rtmp" && scheme != "rtmps" && scheme != "srt" && scheme != "icecast":
-				add("app %q: push[%d] scheme %q not supported (rtmp, rtmps, srt, icecast)", a.Name, i, scheme)
+			case scheme != "rtmp" && scheme != "rtmps" && scheme != "srt" && scheme != "icecast" && scheme != "icecasts":
+				add("app %q: push[%d] scheme %q not supported (rtmp, rtmps, srt, icecast, icecasts)", a.Name, i, scheme)
 			}
 		}
 	}

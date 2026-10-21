@@ -112,8 +112,8 @@ func TestTranscodeMP3SourceToLadder(t *testing.T) {
 		[]string{"-c:a", "libmp3lame", "-b:a", "128k", "-f", "flv", "rtmp://" + e.rtmpAddr + "/live/cam"})...)
 
 	src := e.wait(t, "live/cam")
-	if got := transCodecs(src); got != "H264+MP3" {
-		t.Fatalf("source tracks %s, want H264+MP3", got)
+	if got := transCodecs(src); got != "H264+MP2/MP3" {
+		t.Fatalf("source tracks %s, want H264+MP2/MP3", got)
 	}
 
 	video := e.wait(t, "live/cam_240p")
@@ -121,7 +121,7 @@ func TestTranscodeMP3SourceToLadder(t *testing.T) {
 		t.Fatalf("240p tracks %s, want H264+AAC", got)
 	}
 	radio := e.wait(t, "live/cam_radio")
-	if got := transCodecs(radio); got != "MP3" {
+	if got := transCodecs(radio); got != "MP2/MP3" {
 		t.Fatalf("radio tracks %s, want MP3", got)
 	}
 	if video.Source.Protocol != transcode.ProtocolTranscode {

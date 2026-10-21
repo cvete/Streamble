@@ -467,3 +467,24 @@ func (w pushLogWriter) Write(b []byte) (int, error) {
 	w.t.Log(strings.TrimSpace(string(b)))
 	return len(b), nil
 }
+
+// MP2 audio (common from broadcast encoders) cannot go over RTMP. The push
+// must fail permanently with an actionable message instead of retrying.
+func TestPushMP2OverRTMPFailsClearly(t *testing.T) {
+	dst := pushStartServer(t, config.App{Name: "live"})
+	src := pushStartServer(t, config.App{Name: "live", Push: []config.Push{{
+		Name: "mp2", URL: "rtmp://" + dst.rtmpAddr + "/live/{stream}",
+	}}})
+
+	pushPublishKeep(t, join(inVideo, inAudio, encH264, []string{"-c:a", "mp2", "-f", "mpegts",
+		"srt://" + src.srtAddr + "?streamid=live/bc&pkt_size=1316"})...)
+	pushWaitStream(t, src.hub, "live/bc")
+
+	st := pushWaitStatus(t, src.push, "live/bc", "mp2", push.StateFailed)
+	if !strings.Contains(st.LastError, "transcoded rendition") {
+		t.Fatalf("error should tell the user what to do, got %q", st.LastError)
+	}
+	if st.Reconnects != 0 {
+		t.Fatalf("a permanent failure must not be retried, got %d reconnects", st.Reconnects)
+	}
+}

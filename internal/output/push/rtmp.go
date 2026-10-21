@@ -65,6 +65,9 @@ func dialRTMP(ctx context.Context, rawURL string, s *core.Stream) (session, erro
 
 func (r *rtmpSession) send(sub *core.Subscription) error {
 	err := rtmpconv.Send(r.client, r.stream, sub)
+	if errors.Is(err, rtmpconv.ErrMPEGAudioLayer) {
+		return permanent(err)
+	}
 	if errors.Is(err, rtmpconv.ErrNoTracks) {
 		// Parameter sets may be missing from the first keyframe of a
 		// stream that only carries them in-band; retrying is useful.

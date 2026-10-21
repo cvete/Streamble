@@ -24,6 +24,7 @@ import (
 	"github.com/cvete/streamble/internal/ingest/srt"
 	"github.com/cvete/streamble/internal/output/hls"
 	"github.com/cvete/streamble/internal/output/httpstream"
+	"github.com/cvete/streamble/internal/output/push"
 	"github.com/cvete/streamble/internal/transcode"
 	"github.com/cvete/streamble/internal/web"
 )
@@ -66,6 +67,10 @@ func run() error {
 		}
 	}()
 
+	pusher := push.NewManager(cfg, log)
+	hub.AddHook(pusher)
+	closers = append(closers, pusher.Close)
+
 	transcoder := transcode.NewManager(cfg, hub, log)
 	hub.AddHook(transcoder)
 	closers = append(closers, transcoder.Close)
@@ -104,6 +109,7 @@ func run() error {
 	statusAPI := api.New(hub, hlsManager, cfg.HTTP.APIToken, cfg.HLS.Primary)
 	closers = append(closers, statusAPI.Close)
 	statusAPI.AddStatus("transcodes", func() any { return transcoder.Status() })
+	statusAPI.AddStatus("pushes", func() any { return pusher.Status() })
 
 	streams := &httpstream.Handler{
 		Hub:         hub,

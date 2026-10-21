@@ -165,7 +165,7 @@ func TestPullHTTPMP3Radio(t *testing.T) {
 	t.Cleanup(srv.Close)
 	pullStart(t, e, "live/mp3", srv.URL+"/stream?listener=secret")
 	s := waitForStream(t, e, "live/mp3")
-	pullCheckTracks(t, s, "MP3")
+	pullCheckTracks(t, s, "MP2/MP3")
 	if strings.Contains(s.Source.RemoteAddr, "secret") {
 		t.Fatalf("remote address leaks the query: %s", s.Source.RemoteAddr)
 	}

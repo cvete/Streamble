@@ -73,7 +73,7 @@ func (*Opus) IsVideo() bool { return false }
 type MPEGAudio struct{}
 
 // Name implements Codec.
-func (*MPEGAudio) Name() string { return "MP3" }
+func (*MPEGAudio) Name() string { return "MP2/MP3" }
 
 // IsVideo implements Codec.
 func (*MPEGAudio) IsVideo() bool { return false }

@@ -87,7 +87,7 @@ func TestRoundTrip(t *testing.T) {
 		for _, tr := range tracks {
 			names[tr.Codec.Name()] = true
 		}
-		for _, want := range []string{"H264", "AAC", "MP3", "AC3"} {
+		for _, want := range []string{"H264", "AAC", "MP2/MP3", "AC3"} {
 			if !names[want] {
 				t.Errorf("track %s lost in round trip (got %v)", want, names)
 			}
@@ -105,7 +105,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	// The demuxer emits a unit when the next one starts, so the tail may be
 	// short by one; everything else must arrive.
-	for _, name := range []string{"H264", "AAC", "MP3", "AC3"} {
+	for _, name := range []string{"H264", "AAC", "MP2/MP3", "AC3"} {
 		if counts[name] < 45 {
 			t.Errorf("%s: only %d of 50 units arrived", name, counts[name])
 		}

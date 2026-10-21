@@ -21,6 +21,12 @@ import (
 // ErrNoTracks is returned when no track of the stream can be sent over RTMP.
 var ErrNoTracks = errors.New("no tracks can be sent over RTMP")
 
+// ErrMPEGAudioLayer is returned when a stream carries MP1/MP2 audio, which
+// FLV/RTMP cannot carry (only MP3, Layer III). Broadcast encoders often send
+// MP2; a transcode rendition converts it to AAC or MP3.
+var ErrMPEGAudioLayer = errors.New("RTMP cannot carry MP2/MP1 audio, only MP3 or AAC: " +
+	"push a transcoded rendition instead (list <stream>_<rendition> in the push target's streams)")
+
 // Send forwards a stream to conn until the subscription ends (returns
 // io.EOF) or a write fails.
 //
@@ -166,11 +172,15 @@ func write(w *gortmplib.Writer, tracks map[*core.Track]*gortmplib.Track, u *core
 	case *core.MPEGAudio:
 		pts := u.PTS
 		for _, f := range u.Payload {
+			var h mpeg1audio.FrameHeader
+			ok := h.Unmarshal(f) == nil
+			if ok && h.Layer != 3 {
+				return ErrMPEGAudioLayer
+			}
 			if err := w.WriteMPEG1Audio(rt, pts, f); err != nil {
 				return err
 			}
-			var h mpeg1audio.FrameHeader
-			if h.Unmarshal(f) == nil && h.SampleRate > 0 {
+			if ok && h.SampleRate > 0 {
 				pts += time.Duration(h.SampleCount()) * time.Second / time.Duration(h.SampleRate)
 			}
 		}
