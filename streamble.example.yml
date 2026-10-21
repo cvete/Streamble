@@ -30,6 +30,33 @@ hls:
   segment_duration: 2s     # minimum; segments always start on a keyframe
   part_duration: 200ms     # LL-HLS part length
 
+# Other ways to watch and listen, besides HLS. All on by default.
+playback:
+  http_ts: true            # http://host:8080/<app>/<stream>.ts   (IPTV players, VLC, set-top boxes)
+  http_audio: true         # http://host:8080/<app>/<stream>.mp3 or .aac (radio players)
+  rtmp: true               # rtmp://host:1935/<app>/<stream>
+  srt: true                # srt://host:8890?streamid=read:<app>/<stream>
+
+# Transcoding with FFmpeg. Renditions are published as <app>/<stream>_<name>
+# and combined into an adaptive playlist at /<app>/<stream>/abr.m3u8.
+transcode:
+  ffmpeg: ffmpeg           # path to the ffmpeg binary
+  profiles:
+    - name: tv
+      hwaccel: none        # none (CPU, libx264), nvenc, qsv, vaapi
+      gop: 2s              # keyframe interval, shared by all renditions
+      renditions:
+        - { name: 1080p, height: 1080, video_bitrate: 5000k, audio_bitrate: 160k }
+        - { name: 720p,  height: 720,  video_bitrate: 2800k, audio_bitrate: 128k }
+        - { name: 480p,  height: 480,  video_bitrate: 1400k, audio_bitrate: 96k }
+
+    - name: radio
+      renditions:
+        # Turns any input (MP2, AC-3, AAC...) into MP3 for radio players and Icecast.
+        - { name: mp3, audio_only: true, audio_codec: mp3, audio_bitrate: 128k }
+        # AAC copy for HLS players (MP3 cannot be carried in HLS).
+        - { name: aac, audio_only: true, audio_codec: aac, audio_bitrate: 96k }
+
 # Apps group streams: rtmp://host/live/tv1 publishes stream "tv1" in app "live".
 # An app without publish_key accepts any publisher.
 apps:
@@ -37,10 +64,38 @@ apps:
     publish_key: ${STREAMBLE_LIVE_KEY}     # example: shared key for the app
     stream_keys:                           # optional per-stream keys (override publish_key)
       tv1: ${STREAMBLE_TV1_KEY}
+    transcode: tv                          # every stream in this app gets the "tv" ladder
+    # play_key: ${STREAMBLE_PLAY_KEY}      # require ?key= for .ts/.mp3/.aac, RTMP and SRT playback
+    push:                                  # restream; {app} and {stream} are filled in
+      - name: youtube
+        url: rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}
+        streams: [tv1]                     # only tv1; leave out to push every stream
+      - name: twitch
+        url: rtmp://live.twitch.tv/app/${TWITCH_STREAM_KEY}
+        streams: [tv1]
 
   - name: radio
     publish_key: ${STREAMBLE_RADIO_KEY}
+    transcode: radio
+    push:
+      # Send the MP3 rendition to an Icecast server (Icecast 2.4+, HTTP PUT).
+      - name: icecast
+        url: icecast://source:${ICECAST_PASSWORD}@icecast.example.com:8000/{stream}.mp3
+        streams: [fm1_mp3]
 
   # - name: secure
   #   publish_key: change-me
   #   srt_passphrase: "at-least-10-characters"   # SRT encryption, 10 to 79 chars
+
+# Pull streams from elsewhere and republish them here (relay, restream, re-package).
+# sources:
+#   - path: live/news            # must be <app>/<stream> of an app defined above
+#     url: http://example.com/news.ts            # HTTP MPEG-TS
+#   - path: radio/partner
+#     url: https://stream.example.com/radio.mp3  # Icecast/Shoutcast MP3 or AAC
+#   - path: live/sat
+#     url: udp://239.1.1.1:5000                  # multicast MPEG-TS (also udp://@:5000 to listen)
+#   - path: live/remote
+#     url: srt://remote.example.com:9000?streamid=read:live/x&passphrase=...
+#   - path: live/mirror
+#     url: https://example.com/live/index.m3u8   # HLS
