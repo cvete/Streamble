@@ -7,6 +7,7 @@
 package srt
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -127,14 +128,18 @@ func (s *Server) handleRequest(req gosrt.ConnRequest) {
 			req.Reject(gosrt.REJ_PEER)
 			return
 		}
-		path, app, err = s.Auth.AuthorizePlay(sid.Path, sid.Key)
+		path, app, err = s.Auth.Play(context.Background(), auth.Request{
+			Path: sid.Path, Key: sid.Key, Protocol: "srt", RemoteAddr: remote,
+		})
 		if err == nil {
 			if stream = s.Hub.Lookup(path); stream == nil {
 				err = errors.New("stream not live")
 			}
 		}
 	} else {
-		path, app, err = s.Auth.AuthorizePublish(sid.Path, sid.Key)
+		path, app, err = s.Auth.Publish(context.Background(), auth.Request{
+			Path: sid.Path, Key: sid.Key, Protocol: "srt", RemoteAddr: remote,
+		})
 	}
 	if err != nil {
 		log.Warn("SRT "+action+" rejected", "err", err)

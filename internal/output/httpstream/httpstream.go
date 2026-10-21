@@ -184,8 +184,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := r.URL.Query().Get("key")
-	path, _, err := h.Auth.AuthorizePlay(reqPath, key)
+	path, _, err := h.Auth.Play(r.Context(), auth.Request{
+		Path: reqPath, Key: key, Protocol: "http", RemoteAddr: r.RemoteAddr,
+	})
 	switch {
+	case errors.Is(err, auth.ErrDenied):
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	case errors.Is(err, auth.ErrUnauthorized) && key == "":
 		http.Error(w, "play key required", http.StatusUnauthorized)
 		return
