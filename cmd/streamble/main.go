@@ -22,6 +22,7 @@ import (
 	"github.com/cvete/streamble/internal/ingest/rtmp"
 	"github.com/cvete/streamble/internal/ingest/srt"
 	"github.com/cvete/streamble/internal/output/hls"
+	"github.com/cvete/streamble/internal/transcode"
 	"github.com/cvete/streamble/internal/web"
 )
 
@@ -63,6 +64,19 @@ func run() error {
 		}
 	}()
 
+	transcoder := transcode.NewManager(cfg, hub, log)
+	hub.AddHook(transcoder)
+	closers = append(closers, transcoder.Close)
+	hlsManager.ABR = func(path string) []string {
+		var paths []string
+		for _, r := range transcoder.Renditions(path) {
+			if !r.AudioOnly {
+				paths = append(paths, r.Path)
+			}
+		}
+		return paths
+	}
+
 	if cfg.RTMP.Enabled {
 		s := &rtmp.Server{Addr: cfg.RTMP.Listen, Hub: hub, Auth: authz, Log: log}
 		if err := s.Start(); err != nil {
@@ -86,6 +100,7 @@ func run() error {
 
 	statusAPI := api.New(hub, hlsManager, cfg.HTTP.APIToken, cfg.HLS.Primary)
 	closers = append(closers, statusAPI.Close)
+	statusAPI.AddStatus("transcodes", func() any { return transcoder.Status() })
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", statusAPI)

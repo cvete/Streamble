@@ -33,6 +33,23 @@ type API struct {
 	rates    *rateSampler
 	stopOnce sync.Once
 	stop     chan struct{}
+
+	statusMu sync.RWMutex
+	statuses map[string]func() any
+	// Listeners, when set, adds non-HLS clients (HTTP .ts/.mp3/.aac) to the
+	// viewer count of a stream.
+	Listeners func(path string) int
+}
+
+// AddStatus exposes fn's result as JSON at /api/v1/<name>, e.g. the state of
+// transcode jobs or restream targets.
+func (a *API) AddStatus(name string, fn func() any) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	if a.statuses == nil {
+		a.statuses = make(map[string]func() any)
+	}
+	a.statuses[name] = fn
 }
 
 // New creates the API and starts its bitrate sampler.
@@ -92,6 +109,8 @@ type StreamInfo struct {
 type HLSURLs struct {
 	Primary  string            `json:"primary"`
 	Variants map[string]string `json:"variants"`
+	// ABR is the adaptive bitrate playlist of a transcoded stream.
+	ABR string `json:"abr,omitempty"`
 }
 
 // ServeHTTP routes API requests.
@@ -143,7 +162,14 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.info(s))
 
 	default:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		a.statusMu.RLock()
+		fn := a.statuses[strings.TrimPrefix(route, "/")]
+		a.statusMu.RUnlock()
+		if fn == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{strings.TrimPrefix(route, "/"): fn()})
 	}
 }
 
@@ -167,7 +193,7 @@ func (a *API) info(s *core.Stream) StreamInfo {
 		BytesOut:       s.BytesOut.Load(),
 		BitrateInKbps:  in,
 		BitrateOutKbps: out,
-		Viewers:        a.HLS.Viewers(s.Path),
+		Viewers:        a.viewers(s.Path),
 		HLS: HLSURLs{
 			Primary:  "/" + s.Path + "/index.m3u8",
 			Variants: map[string]string{},
@@ -183,7 +209,18 @@ func (a *API) info(s *core.Stream) StreamInfo {
 	for _, v := range a.HLS.Variants(s.Path) {
 		info.HLS.Variants[v] = "/" + s.Path + "/" + v + "/index.m3u8"
 	}
+	if a.HLS.ABR != nil && len(a.HLS.ABR(s.Path)) > 0 {
+		info.HLS.ABR = "/" + s.Path + "/abr.m3u8"
+	}
 	return info
+}
+
+func (a *API) viewers(path string) int {
+	n := a.HLS.Viewers(path)
+	if a.Listeners != nil {
+		n += a.Listeners(path)
+	}
+	return n
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

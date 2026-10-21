@@ -32,6 +32,10 @@ type Manager struct {
 	allowOrigin string
 	log         *slog.Logger
 
+	// ABR, when set, returns the rendition stream paths of a transcoded
+	// source stream, in ladder order. It enables /<stream>/abr.m3u8.
+	ABR func(path string) []string
+
 	mu      sync.RWMutex
 	streams map[string]*hlsStream
 }
@@ -223,6 +227,11 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path, variant, file, ok := m.route(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+
+	if file == abrPlaylist && m.ABR != nil {
+		m.serveABR(w, r, path, variant, strings.Count(strings.Trim(r.URL.Path, "/"), "/"))
 		return
 	}
 

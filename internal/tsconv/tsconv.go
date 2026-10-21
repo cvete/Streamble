@@ -34,8 +34,11 @@ func DurationToTicks(d time.Duration) int64 {
 // Demux reads MPEG-TS from r, publishes it at path, and forwards media
 // until r returns an error. The stream is unpublished before returning.
 // Tracks with codecs the hub does not support are skipped with a warning.
+//
+// r may be a byte stream (pipe, HTTP body) or packet-oriented (SRT, UDP):
+// the 64 KB buffer means every underlying read can take a whole datagram.
 func Demux(r io.Reader, hub *core.Hub, path string, src core.SourceInfo, log *slog.Logger) error {
-	tr := &mpegts.Reader{R: mpegts.NewBufferedReader(r)}
+	tr := &mpegts.Reader{R: bufio.NewReaderSize(r, 64*1024)}
 	if err := tr.Initialize(); err != nil {
 		return fmt.Errorf("reading MPEG-TS: %w", err)
 	}
