@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -45,9 +46,13 @@ type Handler struct {
 	PlaybackFunc func() config.Playback
 	AllowOrigin  string
 	Log          *slog.Logger
+	// Country, when set, maps a client IP address to an ISO country code
+	// (or "--"). It is called once per connection; see ListenersByCountry.
+	Country func(ip string) string
 
 	mu        sync.Mutex
 	listeners map[string]int
+	countries map[string]map[string]int // path -> country -> listeners
 }
 
 // split returns the stream path ("app/stream") and extension of a
@@ -79,7 +84,38 @@ func (h *Handler) Listeners(path string) int {
 	return h.listeners[path]
 }
 
-func (h *Handler) addListener(path string, d int) {
+// ListenersByCountry returns the HTTP stream clients of "<app>/<stream>"
+// by country code ("--" when unknown). It is nil when Country is not set.
+func (h *Handler) ListenersByCountry(path string) map[string]int {
+	if h.Country == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]int, len(h.countries[path]))
+	for c, n := range h.countries[path] {
+		out[c] = n
+	}
+	return out
+}
+
+// listenerCountry looks up the country of a client, or "" when Country is
+// not set. X-Forwarded-For is not trusted (that needs a proxy setting).
+func (h *Handler) listenerCountry(r *http.Request) string {
+	if h.Country == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if c := h.Country(host); c != "" {
+		return c
+	}
+	return "--"
+}
+
+func (h *Handler) addListener(path, country string, d int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.listeners == nil {
@@ -88,6 +124,24 @@ func (h *Handler) addListener(path string, d int) {
 	h.listeners[path] += d
 	if h.listeners[path] <= 0 {
 		delete(h.listeners, path)
+	}
+	if country == "" {
+		return
+	}
+	if h.countries == nil {
+		h.countries = make(map[string]map[string]int)
+	}
+	m := h.countries[path]
+	if m == nil {
+		m = make(map[string]int)
+		h.countries[path] = m
+	}
+	m[country] += d
+	if m[country] <= 0 {
+		delete(m, country)
+	}
+	if len(m) == 0 {
+		delete(h.countries, path)
 	}
 }
 
@@ -202,8 +256,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sub.Close()
-	h.addListener(path, 1)
-	defer h.addListener(path, -1)
+	country := h.listenerCountry(r)
+	h.addListener(path, country, 1)
+	defer h.addListener(path, country, -1)
 
 	rc := http.NewResponseController(w)
 	cw := &countingWriter{w: w, stream: stream}
