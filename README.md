@@ -1,26 +1,31 @@
 # Streamble
 
 Streamble is an open-source live streaming server for TV channels, radio and
-events. Publish with RTMP or SRT from OBS, vMix, hardware encoders or FFmpeg;
-watch with HLS and Apple Low-Latency HLS in any browser, phone or smart TV.
+events. Publish with RTMP or SRT from OBS, vMix, hardware encoders or FFmpeg,
+pull streams from other servers, transcode them into quality ladders, and
+deliver them as HLS, Low-Latency HLS, MPEG-TS, MP3/AAC radio streams, RTMP or
+SRT, while restreaming to YouTube, Twitch, Facebook or Icecast.
 
-It is a single binary with no runtime dependencies, licensed under the
-AGPL-3.0.
+It is a single binary, licensed under the AGPL-3.0. FFmpeg is only needed
+for transcoding.
 
-> **Status: early development (milestone 1 of 5).** Ingest and HLS playback
-> work and are covered by end-to-end tests. Transcoding, restreaming to
-> YouTube/Twitch, the control panel and recording are next; see
-> [ROADMAP.md](ROADMAP.md).
+> **Status: early development (milestone 2 of 5).** Everything listed below
+> works and is covered by end-to-end tests with real FFmpeg streams, but has
+> not yet been run in production. The control panel, recording and edge mode
+> are next; see [ROADMAP.md](ROADMAP.md).
 
-## What works today
+## What it does
 
 | | |
 |---|---|
-| **Ingest** | RTMP (H.264, H.265, AAC, Opus), SRT with optional encryption (MPEG-TS with H.264, H.265, AAC, Opus) |
-| **Playback** | Apple Low-Latency HLS, HLS with fMP4 segments, classic HLS with MPEG-TS segments |
-| **Radio** | Audio-only streams (AAC, Opus) over all HLS variants |
-| **Security** | Publish keys per app or per stream, SRT passphrases, optional API token |
-| **Monitoring** | JSON status API with live bitrates and viewer estimates, built-in monitor and test player |
+| **Ingest** | RTMP and SRT publishing (optionally encrypted), with publish keys per app or per stream |
+| **Pull** | HTTP MPEG-TS (`.ts`), Icecast/Shoutcast MP3 and AAC radio, HLS (`.m3u8`), UDP unicast and multicast, SRT, RTMP |
+| **Codecs** | H.264, H.265, AAC, MP3, MP2, AC-3, Opus |
+| **Transcode** | FFmpeg quality ladders on CPU or GPU (NVENC, QSV, VAAPI), MP2/AC-3/MP3 to AAC for web players, MP3 renditions for radio, adaptive bitrate playlist |
+| **Playback** | Apple Low-Latency HLS, fMP4 HLS, MPEG-TS HLS, continuous `.ts` over HTTP, `.mp3` and `.aac` radio streams, RTMP, SRT |
+| **Restream** | RTMP/RTMPS (YouTube, Twitch, Facebook, any server), SRT, Icecast (MP3/AAC), with automatic reconnect |
+| **Security** | Publish keys, play keys, SRT passphrases, API token; keys never appear in logs |
+| **Monitoring** | JSON API for streams, bitrates, viewers, transcoders, restreams and pull sources; built-in monitor and test player |
 
 ## Quick start
 
@@ -37,15 +42,17 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine \
   -f flv rtmp://localhost:1935/live/test
 ```
 
-Open <http://localhost:8080> to see it on air and play it. The stream is at
-`http://localhost:8080/live/test/index.m3u8`.
+Open <http://localhost:8080> to see it on air and play it.
 
 ### Docker
 
 ```sh
-cp streamble.example.yml streamble.yml   # edit keys
+cp streamble.example.yml streamble.yml   # edit keys, profiles, targets
 docker compose up -d
 ```
+
+The Docker image does not include FFmpeg yet; install it on the host and run
+the binary directly if you need transcoding.
 
 ## Publishing
 
@@ -67,17 +74,83 @@ The standard SRT access-control syntax also works:
 `streamid=#!::r=live/tv1,m=publish,s=YOUR_PUBLISH_KEY`. If the app has an
 `srt_passphrase`, add `&passphrase=...` on the encoder.
 
-## Playback URLs
+**Pulling** from another server, a radio station or a satellite receiver:
 
-| URL | Format |
+```yaml
+sources:
+  - path: live/news
+    url: http://example.com/news.ts          # also .m3u8, .mp3, udp://, srt://, rtmp://
+```
+
+## Watching and listening
+
+For stream `live/tv1`:
+
+| URL | What |
 |---|---|
-| `/live/tv1/index.m3u8` | Primary variant (Low-Latency HLS by default) |
-| `/live/tv1/llhls/index.m3u8` | Apple Low-Latency HLS |
-| `/live/tv1/fmp4/index.m3u8` | HLS with fMP4 segments (enable in config) |
-| `/live/tv1/mpegts/index.m3u8` | Classic HLS with `.ts` segments, H.264 + AAC only |
+| `http://server:8080/live/tv1/index.m3u8` | HLS, primary variant (Low-Latency HLS by default) |
+| `http://server:8080/live/tv1/abr.m3u8` | Adaptive bitrate playlist, when the app has a transcode profile |
+| `http://server:8080/live/tv1/mpegts/index.m3u8` | Classic HLS with `.ts` segments, for older TVs (H.264 + AAC only) |
+| `http://server:8080/live/tv1.ts` | Continuous MPEG-TS, for IPTV players, VLC and set-top boxes |
+| `http://server:8080/live/tv1.mp3` | MP3 radio stream (needs MP3 audio, e.g. a transcode rendition) |
+| `http://server:8080/live/tv1.aac` | AAC radio stream |
+| `rtmp://server:1935/live/tv1` | RTMP playback |
+| `srt://server:8890?streamid=read:live/tv1` | SRT playback |
 
-Use any HLS player: Safari and iOS natively, [hls.js](https://github.com/video-dev/hls.js)
-or Video.js elsewhere. CORS is open by default (`http.allow_origin`).
+Add `?key=PLAY_KEY` (or `&key=` in the SRT stream ID) when the app has a
+`play_key`. HLS is not covered by play keys yet; signed HLS URLs are planned.
+
+## Transcoding
+
+Give an app a transcode profile and every stream in it gets renditions,
+published as `<stream>_<rendition>` (for example `live/tv1_720p`). Each
+rendition can be watched, restreamed or recorded like any other stream, and
+`abr.m3u8` lets players switch between them.
+
+```yaml
+transcode:
+  profiles:
+    - name: tv
+      hwaccel: none        # none, nvenc, qsv, vaapi
+      renditions:
+        - { name: 720p, height: 720, video_bitrate: 2800k }
+        - { name: 480p, height: 480, video_bitrate: 1400k }
+        - { name: mp3, audio_only: true, audio_codec: mp3 }
+apps:
+  - name: live
+    transcode: tv
+```
+
+Renditions never upscale and share keyframe positions, so players switch
+cleanly. FFmpeg runs as a separate process per stream and is restarted
+automatically if it fails; `/api/v1/transcodes` shows its state.
+
+**Broadcast audio:** feeds with MP2 or AC-3 audio cannot be played by
+browsers and cannot be sent over RTMP. Transcode them: the renditions get
+AAC (or MP3 for radio).
+
+## Restreaming
+
+```yaml
+apps:
+  - name: live
+    push:
+      - name: youtube
+        url: rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}
+        streams: [tv1]
+      - name: radio
+        url: icecast://source:${ICECAST_PASSWORD}@icecast.example.com:8000/{stream}.mp3
+        streams: [fm1_mp3]
+```
+
+- `{app}` and `{stream}` in the URL are filled in for each stream.
+- `streams` limits a target to certain streams. Transcoded renditions are
+  only pushed when listed by name, so a ladder never floods a platform.
+- YouTube, Twitch and Facebook accept H.264 + AAC. Push a transcoded
+  rendition if the source has other codecs; a push that cannot work stops
+  with an explanation instead of retrying forever.
+- Icecast targets need MP3 or AAC audio and Icecast 2.4 or newer.
+- `/api/v1/pushes` shows the state of every target, with keys redacted.
 
 ## Configuration
 
@@ -94,26 +167,30 @@ becoming an empty key, so an app never becomes open by accident.
 | `GET /api/v1/health` | Liveness probe, always public |
 | `GET /api/v1/streams` | Live streams with tracks, bitrates, viewers and playback URLs |
 | `GET /api/v1/streams/{app}/{stream}` | One stream |
+| `GET /api/v1/transcodes` | Transcode jobs |
+| `GET /api/v1/pushes` | Restream targets |
+| `GET /api/v1/sources` | Pull sources |
 | `GET /api/v1/version` | Version, licence and source URL |
 
 Set `http.api_token` to require `Authorization: Bearer <token>`.
 
-Viewer counts are estimated from playlist requests over the last 30 seconds.
-Behind a CDN the origin sees only CDN servers, so use CDN statistics there.
+Viewer counts combine HLS players (estimated from playlist requests over the
+last 30 seconds) and connected `.ts`/`.mp3`/`.aac` listeners. Behind a CDN the
+origin sees only CDN servers, so use CDN statistics there.
 
 ## Scaling
 
 Ingest and packaging are light; serving viewers is mostly limited by network
-bandwidth (5,000 viewers at 3 Mbps is 15 Gbps). A load test with published
-numbers is planned for milestone 5.
-For large audiences put a CDN or caching proxies in front of the HLS URLs.
-Segments are immutable and cacheable; playlists change every segment.
-Built-in edge mode is on the roadmap.
+bandwidth (5,000 viewers at 3 Mbps is 15 Gbps). Transcoding is the heavy
+part: plan roughly one CPU core per 720p rendition with libx264, or use a
+GPU. For large audiences put a CDN or caching proxies in front of the HLS
+URLs. A load test with published numbers and a built-in edge mode are
+planned for milestone 5.
 
 ## Development
 
 ```sh
-make test         # unit + end-to-end tests (needs ffmpeg for e2e)
+make test         # unit + end-to-end tests (needs ffmpeg with libx264, libmp3lame, srt)
 make test-short   # unit tests only
 make lint
 ```
@@ -132,4 +209,5 @@ Streamble builds on the excellent MIT-licensed libraries
 [gortmplib](https://github.com/bluenviron/gortmplib),
 [gohlslib](https://github.com/bluenviron/gohlslib) and
 [mediacommon](https://github.com/bluenviron/mediacommon) by bluenviron, and
-[gosrt](https://github.com/datarhei/gosrt) by datarhei.
+[gosrt](https://github.com/datarhei/gosrt) by datarhei. Transcoding uses
+[FFmpeg](https://ffmpeg.org) as an external program.

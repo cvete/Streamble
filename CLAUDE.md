@@ -16,6 +16,25 @@ the source of truth for design decisions and current status.
   anything that becomes a URL segment or file name.
 - This is clean-room software. Do not copy code, configs or text from
   proprietary products; use public protocol specs and our own design.
+- Reuse the shared converters instead of writing new ones: `tsconv` for
+  anything MPEG-TS (in or out), `rtmpconv` for sending a stream over RTMP,
+  `auth.AuthorizePublish` / `AuthorizePlay` for keys.
+- Streams produced by the transcoder have `SourceInfo.Protocol == "transcode"`;
+  they must never be transcoded again.
+
+## Gotchas learned the hard way
+
+- gosrt ignores read/write deadlines; use watchdogs for silence and stalls.
+- `mpegts.NewBufferedReader` breaks on pipes and HTTP bodies (it needs
+  packet-aligned reads); `tsconv.Demux` already handles this.
+- RTMP/FLV cannot carry MP2 audio, and platforms (YouTube, Twitch) want
+  H.264 + AAC. Broadcast feeds need a transcode rendition before pushing.
+- gortmplib's client takes the stream key from the URL fragment; the push
+  package rewrites `rtmp://host/app/key` accordingly.
+- In FFmpeg test commands, every `-i` must come before the encoder options,
+  or they apply to the next input.
+- Parallel agents work in git worktrees under `.claude/worktrees/` (ignored
+  by git). Never `git add` them.
 
 ## Before you finish
 
