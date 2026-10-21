@@ -22,6 +22,7 @@ import (
 	"github.com/cvete/streamble/internal/ingest/rtmp"
 	"github.com/cvete/streamble/internal/ingest/srt"
 	"github.com/cvete/streamble/internal/output/hls"
+	"github.com/cvete/streamble/internal/output/httpstream"
 	"github.com/cvete/streamble/internal/transcode"
 	"github.com/cvete/streamble/internal/web"
 )
@@ -78,7 +79,7 @@ func run() error {
 	}
 
 	if cfg.RTMP.Enabled {
-		s := &rtmp.Server{Addr: cfg.RTMP.Listen, Hub: hub, Auth: authz, Log: log}
+		s := &rtmp.Server{Addr: cfg.RTMP.Listen, Hub: hub, Auth: authz, Log: log, AllowPlay: cfg.Playback.RTMP}
 		if err := s.Start(); err != nil {
 			return fmt.Errorf("RTMP: %w", err)
 		}
@@ -86,11 +87,12 @@ func run() error {
 	}
 	if cfg.SRT.Enabled {
 		s := &srt.Server{
-			Addr:    cfg.SRT.Listen,
-			Latency: time.Duration(cfg.SRT.LatencyMS) * time.Millisecond,
-			Hub:     hub,
-			Auth:    authz,
-			Log:     log,
+			Addr:      cfg.SRT.Listen,
+			Latency:   time.Duration(cfg.SRT.LatencyMS) * time.Millisecond,
+			Hub:       hub,
+			Auth:      authz,
+			Log:       log,
+			AllowRead: cfg.Playback.SRT,
 		}
 		if err := s.Start(); err != nil {
 			return fmt.Errorf("SRT: %w", err)
@@ -102,10 +104,27 @@ func run() error {
 	closers = append(closers, statusAPI.Close)
 	statusAPI.AddStatus("transcodes", func() any { return transcoder.Status() })
 
+	streams := &httpstream.Handler{
+		Hub:         hub,
+		Auth:        authz,
+		Playback:    cfg.Playback,
+		AllowOrigin: cfg.HTTP.AllowOrigin,
+		Log:         log,
+	}
+	statusAPI.Listeners = streams.Listeners
+
 	mux := http.NewServeMux()
 	mux.Handle("/api/", statusAPI)
 	mux.Handle("/{$}", web.Handler())
-	mux.Handle("/", hlsManager)
+	// /<app>/<stream>.ts|.mp3|.aac are continuous streams; everything else
+	// under / is HLS.
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if streams.Match(r.URL.Path) {
+			streams.ServeHTTP(w, r)
+			return
+		}
+		hlsManager.ServeHTTP(w, r)
+	}))
 
 	httpServer := &http.Server{
 		Addr:              cfg.HTTP.Listen,
@@ -133,7 +152,11 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	httpServer.Shutdown(shutdownCtx) //nolint:errcheck
+	// Continuous stream clients never finish on their own; after the grace
+	// period, close their connections.
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		httpServer.Close() //nolint:errcheck
+	}
 	return nil
 }
 
