@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,7 @@ apps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HTTP.Listen != ":9000" || cfg.HLS.SegmentDuration != 4*time.Second {
+	if cfg.HTTP.Listen != ":9000" || cfg.HLS.SegmentDuration.D() != 4*time.Second {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.HLS.Primary != VariantMPEGTS {
@@ -113,7 +114,7 @@ sources:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := cfg.Profile("abr"); p == nil || len(p.Renditions) != 2 || p.GOP != 2*time.Second {
+	if p := cfg.Profile("abr"); p == nil || len(p.Renditions) != 2 || p.GOP.D() != 2*time.Second {
 		t.Fatalf("profile not parsed: %+v", p)
 	}
 	if a := cfg.App("live"); len(a.Push) != 2 || a.PlayKey != "viewer" {
@@ -131,5 +132,69 @@ func TestUnsetEnvVarIsLeftVisible(t *testing.T) {
 	}
 	if !strings.Contains(cfg.App("a").PublishKey, "DEFINITELY_NOT_SET_123") {
 		t.Fatal("unset variable should stay literal, not become an empty (open) key")
+	}
+}
+
+func TestDurationJSONAndYAML(t *testing.T) {
+	var p Profile
+	if err := json.Unmarshal([]byte(`{"name":"p","gop":"4s"}`), &p); err != nil || p.GOP.D() != 4*time.Second {
+		t.Fatalf("json: %v %v", err, p.GOP)
+	}
+	b, _ := json.Marshal(p)
+	if !strings.Contains(string(b), `"gop":"4s"`) {
+		t.Fatalf("marshal: %s", b)
+	}
+	if err := json.Unmarshal([]byte(`{"gop":"soon"}`), &p); err == nil {
+		t.Fatal("expected error for bad duration")
+	}
+	cfg, err := Load(write(t, "panel:\n  session_ttl: 12h\n"))
+	if err != nil || cfg.Panel.SessionTTL.D() != 12*time.Hour {
+		t.Fatalf("yaml: %v %v", err, cfg.Panel.SessionTTL)
+	}
+}
+
+func TestRuntimeValidation(t *testing.T) {
+	cases := map[string]func(c *Config){
+		"reserved app": func(c *Config) { c.Apps = append(c.Apps, App{Name: "API"}) },
+		"bad auth url": func(c *Config) { c.Apps[0].AuthURL = "ftp://x" },
+		"dup push name": func(c *Config) {
+			c.Apps[0].Push = []Push{{Name: "a", URL: "rtmp://x/y"}, {Name: "a", URL: "rtmp://x/z"}}
+		},
+		"bad hook url":   func(c *Config) { c.Webhooks = []Webhook{{Name: "h", URL: "mailto:x"}} },
+		"bad hook event": func(c *Config) { c.Webhooks = []Webhook{{Name: "h", URL: "https://x", Events: []string{"nope"}}} },
+		"dup hook":       func(c *Config) { c.Webhooks = []Webhook{{Name: "h", URL: "https://x"}, {Name: "h", URL: "https://y"}} },
+		"bad storage":    func(c *Config) { c.Storage.Driver = "mysql" },
+		"zero session":   func(c *Config) { c.Panel.SessionTTL = 0 },
+		"zero retention": func(c *Config) { c.Stats.RetentionDays = 0 },
+	}
+	for name, mutate := range cases {
+		c := Default()
+		mutate(c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+	ok := Default()
+	ok.Apps = nil // no apps is allowed: everything can be managed from the panel
+	ok.Webhooks = []Webhook{{Name: "h", URL: "https://x", Events: []string{EventStreamPublished}}}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloneIsDeep(t *testing.T) {
+	c := Default()
+	c.Storage.DSN = "secret-dsn"
+	c.HTTP.APIToken = "tok"
+	c.Apps[0].Push = []Push{{Name: "yt", URL: "rtmp://x/y", Streams: []string{"a"}}}
+	c.Apps[0].StreamKeys = map[string]string{"a": "k"}
+	d := c.Clone()
+	d.Apps[0].Push[0].Streams[0] = "changed"
+	d.Apps[0].StreamKeys["a"] = "changed"
+	if c.Apps[0].Push[0].Streams[0] != "a" || c.Apps[0].StreamKeys["a"] != "k" {
+		t.Fatal("clone shares memory with the original")
+	}
+	if d.Storage.DSN != "secret-dsn" || d.HTTP.APIToken != "tok" {
+		t.Fatal("clone lost fields hidden from JSON")
 	}
 }

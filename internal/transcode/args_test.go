@@ -9,7 +9,7 @@ import (
 )
 
 func profile(hw string, rends ...config.Rendition) *config.Profile {
-	return &config.Profile{Name: "p", HWAccel: hw, GOP: 2 * time.Second, Renditions: rends}
+	return &config.Profile{Name: "p", HWAccel: hw, GOP: config.Duration(2 * time.Second), Renditions: rends}
 }
 
 func TestPlanDropsEmptyRenditions(t *testing.T) {

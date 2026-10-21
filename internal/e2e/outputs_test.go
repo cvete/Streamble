@@ -39,7 +39,7 @@ func outStart(t *testing.T, playback bool) *outEnv {
 	cfg := config.Default()
 	cfg.HLS.Variants = []string{config.VariantMPEGTS}
 	cfg.HLS.Primary = config.VariantMPEGTS
-	cfg.HLS.SegmentDuration = time.Second
+	cfg.HLS.SegmentDuration = config.Duration(time.Second)
 	cfg.Playback = config.Playback{HTTPTS: playback, HTTPAudio: playback, RTMP: playback, SRT: playback}
 	cfg.Apps = []config.App{
 		{Name: "live", PublishKey: "k3y"},

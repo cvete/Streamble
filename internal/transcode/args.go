@@ -39,7 +39,7 @@ func plan(p *config.Profile, srcVideo, srcAudio bool) []output {
 // buildArgs returns the FFmpeg command line (without the binary) that reads
 // MPEG-TS on stdin and writes one MPEG-TS stream per output to its pipe.
 func buildArgs(p *config.Profile, outs []output) []string {
-	gop := p.GOP
+	gop := p.GOP.D()
 	if gop <= 0 {
 		gop = 2 * time.Second
 	}

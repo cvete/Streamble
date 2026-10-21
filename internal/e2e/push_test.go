@@ -46,7 +46,7 @@ func pushStartServer(t *testing.T, apps ...config.App) *pushServer {
 	cfg := config.Default()
 	cfg.HLS.Variants = []string{config.VariantMPEGTS}
 	cfg.HLS.Primary = config.VariantMPEGTS
-	cfg.HLS.SegmentDuration = time.Second
+	cfg.HLS.SegmentDuration = config.Duration(time.Second)
 	cfg.Apps = apps
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)

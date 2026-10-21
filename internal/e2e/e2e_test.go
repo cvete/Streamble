@@ -39,7 +39,7 @@ func start(t *testing.T) *env {
 
 	cfg := config.Default()
 	cfg.HLS.Variants = []string{config.VariantLLHLS, config.VariantFMP4, config.VariantMPEGTS}
-	cfg.HLS.SegmentDuration = time.Second
+	cfg.HLS.SegmentDuration = config.Duration(time.Second)
 	cfg.Apps = []config.App{
 		{Name: "live", PublishKey: "k3y"},
 		{Name: "secure", SRTPassphrase: "passphrase123"},

@@ -114,8 +114,8 @@ func (m *Manager) newMuxer(s *core.Stream, variant string) (*gohlslib.Muxer, map
 		Tracks:             tracks,
 		Variant:            muxerVariant(variant),
 		SegmentCount:       m.cfg.SegmentCount,
-		SegmentMinDuration: m.cfg.SegmentDuration,
-		PartMinDuration:    m.cfg.PartDuration,
+		SegmentMinDuration: m.cfg.SegmentDuration.D(),
+		PartMinDuration:    m.cfg.PartDuration.D(),
 		OnEncodeError: func(err error) {
 			m.log.Debug("HLS encode error", "path", s.Path, "variant", variant, "err", err)
 		},

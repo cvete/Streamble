@@ -37,7 +37,7 @@ func transStart(t *testing.T, ffmpegPath string, p config.Profile) *transEnv {
 	}
 
 	cfg := config.Default()
-	cfg.HLS.SegmentDuration = time.Second
+	cfg.HLS.SegmentDuration = config.Duration(time.Second)
 	cfg.Transcode.FFmpeg = ffmpegPath
 	cfg.Transcode.Profiles = []config.Profile{p}
 	cfg.Apps = []config.App{{Name: "live", Transcode: p.Name}}
