@@ -36,6 +36,10 @@ type Manager struct {
 	// source stream, in ladder order. It enables /<stream>/abr.m3u8.
 	ABR func(path string) []string
 
+	// Country, when set, maps a client IP address to an ISO country code
+	// (or "--"). It is called once per new viewer; see ViewersByCountry.
+	Country func(ip string) string
+
 	mu      sync.RWMutex
 	streams map[string]*hlsStream
 }
@@ -249,7 +253,11 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasSuffix(file, ".m3u8") {
-		hs.viewers.touch(clientID(r))
+		var country func() string
+		if lookup := m.Country; lookup != nil {
+			country = func() string { return lookup(remoteIP(r)) }
+		}
+		hs.viewers.touchFrom(clientID(r), country)
 	}
 
 	cw := &countingWriter{ResponseWriter: w}
@@ -287,6 +295,21 @@ func (m *Manager) Viewers(path string) int {
 		return 0
 	}
 	return hs.viewers.count()
+}
+
+// ViewersByCountry returns the estimated current HLS viewers of a stream
+// by country code ("--" when unknown). It is nil when Country is not set.
+func (m *Manager) ViewersByCountry(path string) map[string]int {
+	if m.Country == nil {
+		return nil
+	}
+	m.mu.RLock()
+	hs := m.streams[path]
+	m.mu.RUnlock()
+	if hs == nil {
+		return map[string]int{}
+	}
+	return hs.viewers.byCountry()
 }
 
 // Variants returns the variants available for a stream.
