@@ -8,6 +8,7 @@
 package rtmp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -134,7 +135,9 @@ func (s *Server) handleConn(conn net.Conn) error {
 		return s.play(conn, sc, remote)
 	}
 
-	path, _, err := s.Auth.AuthorizePublish(sc.URL.Path, sc.URL.Query().Get("key"))
+	path, _, err := s.Auth.Publish(context.Background(), auth.Request{
+		Path: sc.URL.Path, Key: sc.URL.Query().Get("key"), Protocol: "rtmp", RemoteAddr: remote,
+	})
 	if err != nil {
 		sc.RejectAction() //nolint:errcheck
 		s.Log.Warn("RTMP publish rejected", "remote", remote, "path", sc.URL.Path, "err", err)
@@ -181,7 +184,9 @@ func (s *Server) play(conn net.Conn, sc *gortmplib.ServerConn, remote string) er
 		return errors.New("playback disabled")
 	}
 
-	path, _, err := s.Auth.AuthorizePlay(sc.URL.Path, sc.URL.Query().Get("key"))
+	path, _, err := s.Auth.Play(context.Background(), auth.Request{
+		Path: sc.URL.Path, Key: sc.URL.Query().Get("key"), Protocol: "rtmp", RemoteAddr: remote,
+	})
 	if err != nil {
 		sc.RejectAction() //nolint:errcheck
 		s.Log.Warn("RTMP playback rejected", "remote", remote, "path", sc.URL.Path, "err", err)
