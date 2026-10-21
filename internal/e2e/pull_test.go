@@ -15,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cvete/streamble/internal/auth"
 	"github.com/cvete/streamble/internal/config"
 	"github.com/cvete/streamble/internal/core"
 	"github.com/cvete/streamble/internal/ingest/pull"
+	"github.com/cvete/streamble/internal/ingest/rtmp"
 )
 
 // pullStart runs a pull manager for one source on the test hub.
@@ -234,8 +236,8 @@ func TestPullSRTCaller(t *testing.T) {
 }
 
 func TestPullRTMP(t *testing.T) {
-	// FFmpeg as an RTMP server that plays to one client. (Pulling from
-	// Streamble's own RTMP ingest needs RTMP playback there.)
+	// FFmpeg as an RTMP server that plays to one client; see also
+	// TestPullRTMPFromStreamble.
 	e := start(t)
 	port := pullFreeTCPPort(t)
 	publish(t, join(av264AAC, []string{"-f", "flv", "-listen", "1", "rtmp://127.0.0.1:" + port + "/app/src"})...)
@@ -244,6 +246,39 @@ func TestPullRTMP(t *testing.T) {
 	pullCheckTracks(t, s, "H264", "AAC")
 	pullCountUnits(t, s, 25)
 	play(t, e.http.URL+"/live/rtmppull/index.m3u8")
+}
+
+// Relay through Streamble's own RTMP playback: publish to live/a, pull it
+// back into live/b. Exercises RTMP play and RTMP pull against each other.
+func TestPullRTMPFromStreamble(t *testing.T) {
+	e := start(t)
+	player := &rtmp.Server{
+		Addr: "127.0.0.1:0", Hub: e.hub, AllowPlay: true,
+		Auth: auth.New(pullRelayConfig(t)), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := player.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(player.Close)
+
+	publish(t, join(av264AAC, []string{"-f", "flv", "rtmp://" + e.rtmpAddr + "/live/a?key=k3y"})...)
+	waitForStream(t, e, "live/a")
+	pullStart(t, e, "live/b", "rtmp://"+player.ListenAddr().String()+"/live/a")
+	s := waitForStream(t, e, "live/b")
+	pullCheckTracks(t, s, "H264", "AAC")
+	pullCountUnits(t, s, 25)
+	play(t, e.http.URL+"/live/b/index.m3u8")
+}
+
+// pullRelayConfig matches the apps of the e2e start helper.
+func pullRelayConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Apps = []config.App{{Name: "live", PublishKey: "k3y"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 func TestPullReconnect(t *testing.T) {

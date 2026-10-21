@@ -19,6 +19,7 @@ import (
 	"github.com/cvete/streamble/internal/auth"
 	"github.com/cvete/streamble/internal/config"
 	"github.com/cvete/streamble/internal/core"
+	"github.com/cvete/streamble/internal/ingest/pull"
 	"github.com/cvete/streamble/internal/ingest/rtmp"
 	"github.com/cvete/streamble/internal/ingest/srt"
 	"github.com/cvete/streamble/internal/output/hls"
@@ -112,6 +113,13 @@ func run() error {
 		Log:         log,
 	}
 	statusAPI.Listeners = streams.Listeners
+
+	// Pull sources last, once every hook is registered, so pulled streams
+	// get HLS, transcoding and restreaming like any other.
+	puller := &pull.Manager{Sources: cfg.Sources, Hub: hub, Log: log}
+	puller.Start()
+	closers = append(closers, puller.Close)
+	statusAPI.AddStatus("sources", func() any { return puller.Status() })
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", statusAPI)
