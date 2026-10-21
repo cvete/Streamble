@@ -1,7 +1,10 @@
-// Package rtmp implements RTMP publishing (ingest) into the stream hub.
+// Package rtmp implements RTMP publishing (ingest) into the stream hub, and
+// RTMP playback of hub streams when enabled.
 //
 // Encoders connect to rtmp://host:1935/<app> and publish with the stream key
-// "<stream>" or "<stream>?key=<publish key>".
+// "<stream>" or "<stream>?key=<publish key>". Players open
+// rtmp://host:1935/<app>/<stream>, adding "?key=<play key>" when the app
+// has one.
 package rtmp
 
 import (
@@ -17,24 +20,32 @@ import (
 
 	"github.com/cvete/streamble/internal/auth"
 	"github.com/cvete/streamble/internal/core"
+	"github.com/cvete/streamble/internal/rtmpconv"
 )
 
 const (
 	handshakeTimeout = 10 * time.Second
 	readTimeout      = 10 * time.Second
+	writeTimeout     = 10 * time.Second
+	// bytesOutInterval is how often bytes sent to players are added to the
+	// stream's outgoing counter.
+	bytesOutInterval = 2 * time.Second
 )
 
-// Server accepts RTMP publishers.
+// Server accepts RTMP publishers and, when AllowPlay is set, players.
 type Server struct {
 	Addr string
 	Hub  *core.Hub
 	Auth *auth.Authorizer
 	Log  *slog.Logger
+	// AllowPlay enables RTMP playback of live streams.
+	AllowPlay bool
 
-	ln    net.Listener
-	mu    sync.Mutex
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
+	ln      net.Listener
+	closing chan struct{}
+	mu      sync.Mutex
+	conns   map[net.Conn]struct{}
+	wg      sync.WaitGroup
 }
 
 // Start begins listening. It returns once the listener is open.
@@ -45,6 +56,7 @@ func (s *Server) Start() error {
 	}
 	s.ln = ln
 	s.conns = make(map[net.Conn]struct{})
+	s.closing = make(chan struct{})
 	s.Log.Info("RTMP ingest listening", "addr", ln.Addr().String())
 
 	s.wg.Add(1)
@@ -62,6 +74,11 @@ func (s *Server) Close() {
 	}
 	s.ln.Close()
 	s.mu.Lock()
+	select {
+	case <-s.closing:
+	default:
+		close(s.closing)
+	}
 	for c := range s.conns {
 		c.Close()
 	}
@@ -102,7 +119,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 	remote := conn.RemoteAddr().String()
 	conn.SetReadDeadline(time.Now().Add(handshakeTimeout)) //nolint:errcheck
 
-	sc := &gortmplib.ServerConn{RW: conn}
+	sc := &gortmplib.ServerConn{RW: &deadlineWriter{Conn: conn}}
 	if err := sc.Initialize(); err != nil {
 		return err
 	}
@@ -111,9 +128,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 	}
 
 	if !sc.Publish {
-		sc.RejectAction() //nolint:errcheck
-		s.Log.Warn("RTMP playback is not supported yet, use HLS", "remote", remote, "path", sc.URL.Path)
-		return errors.New("playback not supported")
+		return s.play(conn, sc, remote)
 	}
 
 	path, _, err := s.Auth.AuthorizePublish(sc.URL.Path, sc.URL.Query().Get("key"))
@@ -144,6 +159,94 @@ func (s *Server) handleConn(conn net.Conn) error {
 			return err
 		}
 	}
+}
+
+// play sends a live stream to an RTMP player.
+func (s *Server) play(conn net.Conn, sc *gortmplib.ServerConn, remote string) error {
+	if !s.AllowPlay {
+		sc.RejectAction() //nolint:errcheck
+		s.Log.Warn("RTMP playback rejected: disabled", "remote", remote, "path", sc.URL.Path)
+		return errors.New("playback disabled")
+	}
+
+	path, _, err := s.Auth.AuthorizePlay(sc.URL.Path, sc.URL.Query().Get("key"))
+	if err != nil {
+		sc.RejectAction() //nolint:errcheck
+		s.Log.Warn("RTMP playback rejected", "remote", remote, "path", sc.URL.Path, "err", err)
+		return err
+	}
+
+	var sub *core.Subscription
+	stream := s.Hub.Lookup(path)
+	if stream != nil {
+		sub = stream.Subscribe("rtmp-play", 0)
+	}
+	if sub == nil {
+		sc.RejectAction() //nolint:errcheck
+		s.Log.Warn("RTMP playback rejected: stream not live", "remote", remote, "path", path)
+		return errors.New("stream not live")
+	}
+	defer sub.Close()
+
+	// Players send little after the play command (acknowledgements,
+	// pings), so a read timeout would drop healthy players. Dead players
+	// are detected by the per-write deadline instead.
+	conn.SetReadDeadline(time.Time{}) //nolint:errcheck
+
+	done := make(chan struct{})
+	counted := make(chan struct{})
+	go func() {
+		defer close(counted)
+		s.countBytesOut(sc, stream, sub, done)
+	}()
+
+	s.Log.Info("RTMP player started", "remote", remote, "path", path)
+	err = rtmpconv.Send(sc, stream, sub)
+	close(done)
+	<-counted
+	s.Log.Info("RTMP player stopped", "remote", remote, "path", path)
+	return err
+}
+
+// countBytesOut adds the bytes sent to a player to the stream's outgoing
+// counter until done is closed. On server shutdown it ends the
+// subscription, so a player waiting for media does not block Close.
+func (s *Server) countBytesOut(sc *gortmplib.ServerConn, stream *core.Stream, sub *core.Subscription,
+	done <-chan struct{},
+) {
+	last := sc.BytesSent()
+	update := func() {
+		n := sc.BytesSent()
+		stream.BytesOut.Add(n - last)
+		last = n
+	}
+	t := time.NewTicker(bytesOutInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			update()
+		case <-s.closing:
+			sub.Close()
+			<-done
+			update()
+			return
+		case <-done:
+			update()
+			return
+		}
+	}
+}
+
+// deadlineWriter sets a write deadline before every write, so a peer that
+// stops reading is disconnected instead of blocking a goroutine forever.
+type deadlineWriter struct {
+	net.Conn
+}
+
+func (d *deadlineWriter) Write(p []byte) (int, error) {
+	d.Conn.SetWriteDeadline(time.Now().Add(writeTimeout)) //nolint:errcheck
+	return d.Conn.Write(p)
 }
 
 // AttachTracks converts the tracks of an initialized RTMP reader into hub
