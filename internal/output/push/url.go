@@ -2,6 +2,8 @@ package push
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
 	"net/url"
 	"strings"
 
@@ -154,6 +156,46 @@ func scrub(msg string, secrets []string) string {
 		}
 	}
 	return msg
+}
+
+var (
+	rtmpStatusCode = regexp.MustCompile(`\{code ([A-Za-z.]+)\}`)
+	rtmpStatusDesc = regexp.MustCompile(`\{description ([^}]*)\}`)
+)
+
+// describeError turns RTMP onStatus dumps from the client library
+// ("bad result: &{5 ... {code NetStream.Publish.Unauthorized} ...}") into
+// a sentence an operator can act on.
+func describeError(err error) string {
+	msg := err.Error()
+	if !strings.Contains(msg, "bad result") {
+		return msg
+	}
+	code := ""
+	if m := rtmpStatusCode.FindStringSubmatch(msg); m != nil {
+		code = m[1]
+	}
+	desc := ""
+	if m := rtmpStatusDesc.FindStringSubmatch(msg); m != nil {
+		desc = strings.TrimSpace(m[1])
+	}
+	var what string
+	switch {
+	case strings.HasSuffix(code, "Unauthorized"):
+		what = "the target refused the stream key"
+	case strings.HasSuffix(code, "BadName"):
+		what = "the target refused the stream name, or it is already in use"
+	case strings.HasPrefix(code, "NetConnection.Connect"):
+		what = "the target refused the connection; check the app name in the URL"
+	case code != "":
+		what = "the target refused the stream"
+	default:
+		return msg
+	}
+	if desc != "" {
+		return fmt.Sprintf("%s (%s: %s)", what, code, desc)
+	}
+	return fmt.Sprintf("%s (%s)", what, code)
 }
 
 func isRTMP(scheme string) bool { return scheme == "rtmp" || scheme == "rtmps" }

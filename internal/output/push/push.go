@@ -280,7 +280,7 @@ func (t *target) setState(state string, err error) {
 		t.status.Since = time.Now()
 	}
 	if err != nil {
-		t.status.LastError = scrub(err.Error(), t.secrets)
+		t.status.LastError = scrub(describeError(err), t.secrets)
 	}
 	t.mu.Unlock()
 	if changed && t.onState != nil {

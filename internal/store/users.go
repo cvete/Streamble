@@ -43,7 +43,7 @@ type User struct {
 	MustChangePassword bool      `json:"must_change_password"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
-	LastLoginAt        time.Time `json:"last_login_at"`
+	LastLoginAt        time.Time `json:"last_login_at,omitzero"`
 }
 
 const userCols = `id, username, password_hash, role, disabled, must_change_password, created_at, updated_at, last_login_at`
@@ -223,7 +223,7 @@ type APIToken struct {
 	Name       string    `json:"name"`
 	Prefix     string    `json:"prefix"` // first characters, to recognise it
 	CreatedAt  time.Time `json:"created_at"`
-	LastUsedAt time.Time `json:"last_used_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitzero"`
 }
 
 // CreateAPIToken stores the hash of token.
