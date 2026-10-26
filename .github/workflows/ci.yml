@@ -50,12 +50,12 @@ jobs:
         run: docker build -t streamble:ci .
       - name: Smoke test (panel, API, FFmpeg)
         run: |
-          docker run -d --name s -p 8080:8080 -e STREAMBLE_ADMIN_PASSWORD=ci-password-123 streamble:ci
+          docker run -d --name streamble-smoke -p 8080:8080 -e STREAMBLE_ADMIN_PASSWORD=ci-password-123 streamble:ci
           for i in $(seq 1 30); do curl -fsS localhost:8080/api/v1/health && break; sleep 1; done
           curl -fsS localhost:8080/panel/ | grep -q '<div id="root">'
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"ci-password-123"}' localhost:8080/api/v1/auth/login)
           test "$code" = 200
-          docker exec s ffmpeg -hide_banner -version | head -1
-          test "$(docker inspect -f '{{.State.Health.Status}}' s)" != unhealthy
-          docker logs s
+          docker exec streamble-smoke ffmpeg -hide_banner -version | head -1
+          test "$(docker inspect -f '{{.State.Health.Status}}' streamble-smoke)" != unhealthy
+          docker logs streamble-smoke
