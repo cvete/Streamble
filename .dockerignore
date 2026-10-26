@@ -1,0 +1,11 @@
+# The Go build needs only Go sources and the committed panel build.
+.git
+.claude
+.github
+bin
+dist
+data
+web/panel/node_modules
+*.db
+streamble.yml
+.env

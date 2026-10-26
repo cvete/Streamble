@@ -1,0 +1,39 @@
+# Streamble on Coolify (Docker Compose build pack).
+#
+# In Coolify: New resource > Public/Private repository > this repo,
+# Build Pack "Docker Compose", Docker Compose Location
+# "/deploy/docker-compose.coolify.yml". Then set the domain of the
+# "streamble" service (e.g. https://stream.example.com:8080 — the :8080
+# tells Coolify which container port to route; the public URL stays 443).
+#
+# Coolify's proxy terminates HTTPS and forwards the panel, API and HLS to
+# port 8080. RTMP and SRT are not HTTP, so they are published directly on
+# the server: open 1935/tcp and 8890/udp in the VPS firewall. If the domain
+# is behind Cloudflare's orange-cloud proxy, use a separate DNS-only record
+# (e.g. ingest.example.com) for encoders.
+services:
+  streamble:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Coolify magic variable: routes this domain to container port 8080.
+      - SERVICE_FQDN_STREAMBLE_8080
+      # Coolify's proxy reaches the container over a Docker network; trust
+      # it for X-Forwarded-For so logins, viewers and countries see the
+      # real client address. Port 8080 must NOT be published directly.
+      - STREAMBLE_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      # First admin password (must still be changed at first sign-in).
+      # Leave empty to get a generated one in the container log.
+      - STREAMBLE_ADMIN_PASSWORD=${STREAMBLE_ADMIN_PASSWORD:-}
+    ports:
+      - "1935:1935/tcp"   # RTMP ingest and playback
+      - "8890:8890/udp"   # SRT ingest and playback
+    expose:
+      - "8080"            # panel, API, HLS — reached through Coolify's proxy
+    volumes:
+      - streamble-data:/var/lib/streamble   # settings, users, statistics (SQLite)
+
+volumes:
+  streamble-data:

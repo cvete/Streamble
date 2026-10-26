@@ -20,4 +20,6 @@ WORKDIR /var/lib/streamble
 VOLUME /var/lib/streamble
 EXPOSE 1935/tcp 8890/udp 8080/tcp
 USER streamble
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/api/v1/health || exit 1
 ENTRYPOINT ["/usr/local/bin/streamble"]

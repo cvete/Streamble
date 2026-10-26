@@ -28,6 +28,7 @@ import (
 	"github.com/cvete/streamble/internal/output/httpstream"
 	"github.com/cvete/streamble/internal/output/push"
 	"github.com/cvete/streamble/internal/panel"
+	"github.com/cvete/streamble/internal/realip"
 	"github.com/cvete/streamble/internal/settings"
 	"github.com/cvete/streamble/internal/stats"
 	"github.com/cvete/streamble/internal/store"
@@ -248,9 +249,17 @@ func run() error {
 		hlsManager.ServeHTTP(w, r)
 	}))
 
+	trusted, err := realip.Parse(cfg.HTTP.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	if len(trusted) > 0 {
+		log.Info("trusting X-Forwarded-For from reverse proxies", "proxies", strings.Join(cfg.HTTP.TrustedProxies, ","))
+	}
+
 	httpServer := &http.Server{
 		Addr:              cfg.HTTP.Listen,
-		Handler:           mux,
+		Handler:           realip.Handler(trusted, mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

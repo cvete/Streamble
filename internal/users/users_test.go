@@ -84,10 +84,17 @@ func TestLoginSessionAndCookieAuth(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	s.SetCookie(rec, token)
+	s.SetCookie(rec, httptest.NewRequest(http.MethodPost, "/", nil), token)
 	cookie := rec.Result().Cookies()[0]
-	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
-		t.Fatal("cookie must be HttpOnly and SameSite=Lax")
+	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Secure {
+		t.Fatal("cookie must be HttpOnly and SameSite=Lax, and not Secure over plain HTTP")
+	}
+	https := httptest.NewRequest(http.MethodPost, "/", nil)
+	https.Header.Set("X-Forwarded-Proto", "https")
+	rec2 := httptest.NewRecorder()
+	s.SetCookie(rec2, https, token)
+	if !rec2.Result().Cookies()[0].Secure {
+		t.Fatal("cookie must be Secure behind an HTTPS proxy")
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", nil)

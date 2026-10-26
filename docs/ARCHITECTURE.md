@@ -150,6 +150,15 @@ targets. Names are restricted to `[A-Za-z0-9_.-]`, never
 starting with a dot, which keeps paths safe for HTTP routing and future
 file storage. Keys are compared in constant time and never logged.
 
+### Reverse proxies (`internal/realip`)
+
+Production installs sit behind Traefik, Caddy, nginx or a CDN. A middleware
+in front of every HTTP handler replaces `RemoteAddr` with the client
+address from `X-Forwarded-For` (walked from the right, skipping trusted
+hops) when the peer is in `http.trusted_proxies`, and strips forwarding
+headers from everyone else. Downstream code (login limiter, audit, HLS
+viewer counting, countries) therefore only ever reads `RemoteAddr`.
+
 ### Storage (`internal/store`)
 
 `database/sql` over SQLite (modernc.org/sqlite, pure Go, one connection, WAL)

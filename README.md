@@ -58,6 +58,28 @@ docker compose up -d
 The image includes FFmpeg. Settings and statistics are stored in the
 `streamble-data` volume.
 
+### On a VPS with Coolify
+
+Use [`deploy/docker-compose.coolify.yml`](deploy/docker-compose.coolify.yml):
+create a resource from this repository with the **Docker Compose** build
+pack and that file as the compose location, then give the `streamble`
+service a domain such as `https://stream.example.com:8080` (the `:8080` is
+the container port; visitors use normal HTTPS). Open **1935/tcp** (RTMP) and
+**8890/udp** (SRT) in the VPS firewall. The admin password is printed in the
+deployment log on first start, or set `STREAMBLE_ADMIN_PASSWORD`.
+
+Encoders publish to `rtmp://stream.example.com/live` (stream key
+`tv1?key=…`). If the domain goes through Cloudflare's proxy, add a DNS-only
+record for encoders, because Cloudflare does not pass RTMP or SRT.
+
+### Behind any reverse proxy
+
+Set `http.trusted_proxies` (or `STREAMBLE_TRUSTED_PROXIES`) to the proxy's
+address or network, and don't expose port 8080 directly. Otherwise every
+request seems to come from the proxy: one failed-login limit for everyone,
+viewers counted as one, and the proxy's country for all of them. Cookies
+are marked Secure automatically when the proxy reports HTTPS.
+
 ## Publishing
 
 Streams live under an **app**: `live/tv1` is stream `tv1` in app `live`.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"regexp"
 	"slices"
@@ -205,6 +206,12 @@ type HTTP struct {
 	// APIToken is a legacy static admin token, accepted as
 	// "Authorization: Bearer <token>". Prefer per-user API tokens.
 	APIToken string `yaml:"api_token" json:"-"`
+	// TrustedProxies lists reverse proxies (IP addresses or CIDR ranges)
+	// whose X-Forwarded-For header gives the real client address. Needed
+	// behind Traefik, Caddy, nginx or a CDN for correct login limits,
+	// viewer counts and countries. STREAMBLE_TRUSTED_PROXIES (comma
+	// separated) overrides it.
+	TrustedProxies []string `yaml:"trusted_proxies" json:"trusted_proxies"`
 }
 
 // HLS configures HLS output.
@@ -294,6 +301,7 @@ func Default() *Config {
 func Load(path string) (*Config, error) {
 	cfg := Default()
 	if path == "" {
+		applyEnv(cfg)
 		return cfg, cfg.Validate()
 	}
 	raw, err := os.ReadFile(path)
@@ -318,7 +326,21 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	applyEnv(cfg)
 	return cfg, cfg.Validate()
+}
+
+// applyEnv applies the few server settings that containers usually set
+// through the environment rather than a file.
+func applyEnv(cfg *Config) {
+	if v, ok := os.LookupEnv("STREAMBLE_TRUSTED_PROXIES"); ok {
+		cfg.HTTP.TrustedProxies = nil
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				cfg.HTTP.TrustedProxies = append(cfg.HTTP.TrustedProxies, p)
+			}
+		}
+	}
 }
 
 // Validate checks the configuration for errors.
@@ -331,6 +353,13 @@ func (c *Config) Validate() error {
 	}
 	if c.HTTP.Listen == "" {
 		add("http.listen is required")
+	}
+	for _, p := range c.HTTP.TrustedProxies {
+		if _, err := netip.ParsePrefix(p); err != nil {
+			if _, err := netip.ParseAddr(p); err != nil {
+				add("http.trusted_proxies: %q is not an IP address or CIDR range", p)
+			}
+		}
 	}
 
 	if len(c.HLS.Variants) == 0 {

@@ -40,6 +40,8 @@ srt:
 http:
   listen: ":8080"          # HLS playback, API and the monitor page at /
   allow_origin: "*"        # CORS for web players on other domains
+  trusted_proxies: []      # reverse proxies whose X-Forwarded-For is believed,
+                           # e.g. [172.16.0.0/12] for Traefik/Coolify in Docker
   api_token: ""            # set to require "Authorization: Bearer <token>" on /api/
 
 hls:

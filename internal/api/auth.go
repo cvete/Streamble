@@ -35,7 +35,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request, _ *users.Principal) 
 		Error(w, http.StatusInternalServerError, err)
 		return
 	}
-	a.Users.SetCookie(w, token)
+	a.Users.SetCookie(w, r, token)
 	JSON(w, http.StatusOK, map[string]any{"user": u})
 }
 
@@ -43,7 +43,7 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request, p *users.Principal)
 	if p.Session != "" {
 		a.DB.DeleteSession(r.Context(), p.Session) //nolint:errcheck
 	}
-	a.Users.ClearCookie(w)
+	a.Users.ClearCookie(w, r)
 	JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

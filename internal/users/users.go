@@ -180,18 +180,25 @@ func (s *Service) CreateAPIToken(ctx context.Context, u *store.User, name string
 }
 
 // SetCookie stores the session token in the browser.
-func (s *Service) SetCookie(w http.ResponseWriter, token string) {
+func (s *Service) SetCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Value: token, Path: "/",
-		MaxAge: int(s.TTL.Seconds()), HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteLaxMode,
+		MaxAge: int(s.TTL.Seconds()), HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteLaxMode,
 	})
 }
 
+// secure reports whether the cookie should only be sent over HTTPS: always
+// when configured, and whenever the panel is reached over HTTPS, directly
+// or through a trusted proxy (realip strips the header from anyone else).
+func (s *Service) secure(r *http.Request) bool {
+	return s.SecureCookies || r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
 // ClearCookie removes the session cookie.
-func (s *Service) ClearCookie(w http.ResponseWriter) {
+func (s *Service) ClearCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteLaxMode,
 	})
 }
 
